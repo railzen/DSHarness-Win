@@ -103,7 +103,7 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
         Ok(latest) if dsh_files_ok => {
             let record_commit = config::get_dsh_pkg_commit(&app_handle);
             let record_tag = config::get_dsh_pkg_tag(&app_handle);
-            let installed_version = config::get_dsh_version(&app_handle);
+            let installed_version = crate::service::core::active_version(&app_handle);
             // 老记录没有 tag，反查 pkg 仓库 tags 列表确认记录对应的发布版本；
             // 反查失败时由 resolve_update 回退到“以实际文件为准”的保守分支
             let legacy_tags = if record_tag.is_none() {
@@ -199,7 +199,7 @@ pub async fn check_dsh_update(
     let latest = download::fetch_latest_dsh_pkg_info().await?;
     let record_commit = config::get_dsh_pkg_commit(&app_handle);
     let record_tag = config::get_dsh_pkg_tag(&app_handle);
-    let installed_version = config::get_dsh_version(&app_handle);
+    let installed_version = crate::service::core::active_version(&app_handle);
 
     // 老记录没有 tag，反查 pkg 仓库 tags 列表确认记录对应的发布版本；
     // 反查失败时由 resolve_update 回退到“以实际文件为准”的保守分支

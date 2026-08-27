@@ -856,6 +856,10 @@ pub fn resolve_update(
     if installed != latest_version {
         return UpdateCheck::UpdateAvailable;
     }
+    // npm-only 模式以实际安装版本为唯一依据；同版本不因旧记录而误报更新。
+    if !record_matches_latest_release(record_commit, record_tag, latest) {
+        return UpdateCheck::HealUpToDate;
+    }
     // 版本相同 → 确认是否「同一发布」再判免打扰：记录与最新 release 对应
     // （见 [`record_matches_latest_release`]）即文件已是最新，无更新。
     if record_matches_latest_release(record_commit, record_tag, latest) {

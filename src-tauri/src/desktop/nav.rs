@@ -67,6 +67,9 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
       var label = (ordered[j].getAttribute('aria-label') || '').trim();
       if (TOGGLE_LABELS.indexOf(label) !== -1) return ordered[j];
     }
+    // 官方 dsh-client-ui-sidebar 的收缩按钮固定带有 toggle class，作为文案变化时的兜底。
+    var toggle = col.querySelector('button[class*="toggle"]');
+    if (toggle) return toggle;
     return null;
   }
 
