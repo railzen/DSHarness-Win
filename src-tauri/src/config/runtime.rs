@@ -51,68 +51,10 @@ pub fn get_node_download_url() -> Result<String, String> {
     ))
 }
 
-/// 打包的 DeepSeek Harness 发行版下载前缀：恒为 GitHub Release 官方直连，
-/// 作为首选下载源（镜像 ghfast.top 中转不稳定，仅作官方失败后的兜底）。
-fn dsh_core_base_url() -> &'static str {
-    DSH_CORE_URL
-}
-
-/// 打包的 DeepSeek Harness 发行版镜像下载前缀（ghfast.top 中转 GitHub Release）
-fn dsh_mirror_base_url() -> &'static str {
-    DSH_MIRROR_CORE_URL
-}
-
-/// Harness 发行版资产文件名（按平台与架构）
-fn dsh_pkg_asset_filename() -> Result<String, String> {
-    let arch = env::consts::ARCH;
-    let os = env::consts::OS;
-
-    match (os, arch) {
-        ("windows", _) => Ok("deepseek-harness-pkg-windows.zip".to_string()),
-        ("macos", "aarch64") => Ok("deepseek-harness-pkg-macos-arm64.zip".to_string()),
-        ("macos", "x86_64") => Ok("deepseek-harness-pkg-macos-x64.zip".to_string()),
-        ("linux", _) => Ok("deepseek-harness-pkg-linux.zip".to_string()),
-        _ => Err(format!("Unsupported platform: {} {}", os, arch)),
-    }
-}
-
-/// 打包的 DeepSeek Harness 发行版下载地址（GitHub 官方直连，首选源）
-pub fn get_dsh_download_url() -> Result<String, String> {
-    Ok(format!(
-        "{}{}",
-        dsh_core_base_url(),
-        dsh_pkg_asset_filename()?
-    ))
-}
-
-/// 打包的 DeepSeek Harness 发行版下载地址列表（按顺序依次尝试）：
-/// GitHub 官方直连 → ghfast.top 镜像兜底。官方直连失败时由下载层自动
-/// 切换镜像并告知用户，避免 ghfast.top 不稳定导致首次安装失败。
-pub fn get_dsh_download_urls() -> Result<Vec<String>, String> {
-    let filename = dsh_pkg_asset_filename()?;
-    Ok(vec![
-        format!("{}{}", dsh_core_base_url(), filename),
-        format!("{}{}", dsh_mirror_base_url(), filename),
-    ])
-}
-
 /// 为任意 GitHub Release 资产 URL 生成 ghfast.top 镜像兜底地址
 /// （透传原 URL，下载内容一致，仍可做 SHA-256 完整性校验）。
 pub fn mirror_download_url(asset_url: &str) -> String {
     format!("{DSH_MIRROR_PREFIX}{asset_url}")
-}
-
-/// 指定 tag 的 DeepSeek Harness 发行版下载地址。
-///
-/// 把 latest 下载地址中的 `releases/latest/download/` 替换为
-/// `releases/download/<tag>/`，镜像/直连与平台文件名逻辑与最新版完全一致
-/// （GitHub 的 tag 下载路径是固定的 release 资产地址，可被确定性推导）。
-pub fn get_dsh_download_url_for_tag(tag: &str) -> Result<String, String> {
-    let base = dsh_core_base_url().replace(
-        "releases/latest/download/",
-        &format!("releases/download/{tag}/"),
-    );
-    Ok(format!("{}{}", base, dsh_pkg_asset_filename()?))
 }
 
 /// 在 PATH 及常见安装目录中查找 node 可执行文件（不校验版本）
@@ -273,114 +215,6 @@ pub fn get_pnpm_download_url() -> String {
         pnpm_base_url(detect_region()),
         PNPM_VERSION
     )
-}
-
-/// Windows 免安装 Git 的安装目录。
-pub fn get_mingit_install_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_base_dir(app_handle)
-        .join("dependencies")
-        .join(MINGIT_CORE_DIR)
-}
-
-/// Windows 免安装 Git 的 CLI 入口。
-pub fn get_mingit_binary_path<R: Runtime>(app_handle: &AppHandle<R>) -> PathBuf {
-    get_mingit_install_path(app_handle).join(MINGIT_ENTRY_RELATIVE)
-}
-
-/// Windows MinGit 官方发行包文件名。
-fn mingit_pkg_filename(arch: &str) -> Result<String, String> {
-    match arch {
-        "x86_64" => Ok(format!("MinGit-{MINGIT_VERSION}-64-bit.zip")),
-        "aarch64" => Ok(format!("MinGit-{MINGIT_VERSION}-arm64.zip")),
-        _ => Err(format!("MINGIT_PLATFORM_UNSUPPORTED: windows {arch}")),
-    }
-}
-
-/// Windows MinGit 官方发行包下载地址。
-pub fn get_mingit_download_url() -> Result<String, String> {
-    Ok(format!(
-        "{MINGIT_BASE_URL}{}",
-        mingit_pkg_filename(env::consts::ARCH)?
-    ))
-}
-
-/// Windows MinGit 官方发行包固定 SHA-256。
-pub fn get_mingit_sha256() -> Result<&'static str, String> {
-    match env::consts::ARCH {
-        "x86_64" => Ok(MINGIT_X64_SHA256),
-        "aarch64" => Ok(MINGIT_ARM64_SHA256),
-        arch => Err(format!("MINGIT_PLATFORM_UNSUPPORTED: windows {arch}")),
-    }
-}
-
-/// 在 PATH 中寻找可直接运行的系统 Git。
-#[cfg(windows)]
-pub fn find_system_git_binary() -> Option<PathBuf> {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .map(|dir| dir.join("git.exe"))
-        .find(|candidate| candidate.is_file() && git_binary_works(candidate))
-}
-
-/// 运行 Git 并捕获输出；GUI 进程下禁止闪现控制台窗口。
-#[cfg(windows)]
-fn git_output(binary: &Path, arg: &str) -> Option<std::process::Output> {
-    use std::os::windows::process::CommandExt;
-
-    std::process::Command::new(binary)
-        .arg(arg)
-        .creation_flags(0x08000000) // CREATE_NO_WINDOW
-        .output()
-        .ok()
-}
-
-/// 检查 Git CLI 与 HTTPS transport helper 是否完整，避免 PATH 中只有残缺壳程序
-/// （`git --version` 可成功但无法执行 `ls-remote`）阻止自动修复。
-#[cfg(windows)]
-fn git_binary_works(binary: &Path) -> bool {
-    if !git_output(binary, "--version").is_some_and(|output| output.status.success()) {
-        return false;
-    }
-    let Some(output) = git_output(binary, "--exec-path").filter(|output| output.status.success())
-    else {
-        return false;
-    };
-    let exec_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    !exec_path.is_empty()
-        && PathBuf::from(exec_path)
-            .join("git-remote-https.exe")
-            .is_file()
-}
-
-/// 返回桌面端应注入子进程 PATH 的已选 Git `cmd` 目录。
-#[cfg(windows)]
-pub fn get_git_cmd_dir<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
-    if let Some(system_git) = find_system_git_binary() {
-        return system_git.parent().map(Path::to_path_buf);
-    }
-    let bundled = get_mingit_binary_path(app_handle);
-    if bundled.is_file() && git_binary_works(&bundled) {
-        return bundled.parent().map(Path::to_path_buf);
-    }
-    None
-}
-
-/// 非 Windows 平台依赖系统 Git，不额外注入目录。
-#[cfg(not(windows))]
-pub fn get_git_cmd_dir<R: Runtime>(_app_handle: &AppHandle<R>) -> Option<PathBuf> {
-    None
-}
-
-/// 当前环境是否已有可供插件 Git 依赖使用的 Git。
-#[cfg(windows)]
-pub fn git_runtime_ready<R: Runtime>(app_handle: &AppHandle<R>) -> bool {
-    find_system_git_binary().is_some() || git_binary_works(&get_mingit_binary_path(app_handle))
-}
-
-/// 非 Windows 平台不属于本次空白 Windows 环境的自动配置范围。
-#[cfg(not(windows))]
-pub fn git_runtime_ready<R: Runtime>(_app_handle: &AppHandle<R>) -> bool {
-    true
 }
 
 /// Harness 发行版清单路径
@@ -546,28 +380,8 @@ mod tests {
     }
 
     #[test]
-    fn dsh_download_urls_prefer_official_then_mirror() {
-        // 无论哪个地域，首选源都是 GitHub 官方直连；镜像仅作兜底
-        let urls = get_dsh_download_urls().expect("dsh urls");
-        assert_eq!(urls.len(), 2);
-        assert!(
-            urls[0].starts_with(DSH_CORE_URL),
-            "first source must be official GitHub: {}",
-            urls[0]
-        );
-        assert!(
-            urls[1].starts_with(DSH_MIRROR_PREFIX),
-            "fallback must be ghfast mirror: {}",
-            urls[1]
-        );
-        // 两个源的文件名一致（镜像只是换前缀，解压类型判定不受影响）
-        let name = |u: &str| u.rsplit('/').next().unwrap_or("").to_string();
-        assert_eq!(name(&urls[0]), name(&urls[1]));
-    }
-
-    #[test]
     fn mirror_url_prepends_ghfast_prefix() {
-        let asset = "https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/download/v1.0.0/deepseek-harness-pkg-windows.zip";
+        let asset = "https://github.com/railzen/deepseek-harness-win/releases/download/v1.0.0/deepseek-harness-win.exe";
         assert_eq!(
             mirror_download_url(asset),
             format!("{DSH_MIRROR_PREFIX}{asset}")
@@ -589,36 +403,6 @@ mod tests {
         assert!(filename.starts_with(&format!("node-{}", NODE_VERSION)));
         assert!(filename.ends_with(".zip") || filename.ends_with(".tar.gz"));
 
-        let dsh = get_dsh_download_url().expect("dsh url");
-        assert!(dsh.starts_with("https://"));
-        assert!(dsh.ends_with(".zip"));
-    }
-
-    #[test]
-    fn mingit_pkg_filename_covers_supported_windows_architectures() {
-        assert_eq!(
-            mingit_pkg_filename("x86_64").expect("x64 MinGit asset"),
-            format!("MinGit-{MINGIT_VERSION}-64-bit.zip")
-        );
-        assert_eq!(
-            mingit_pkg_filename("aarch64").expect("ARM64 MinGit asset"),
-            format!("MinGit-{MINGIT_VERSION}-arm64.zip")
-        );
-    }
-
-    #[test]
-    fn mingit_pkg_filename_rejects_unsupported_architecture() {
-        let error = mingit_pkg_filename("x86").expect_err("unsupported MinGit architecture");
-        assert_eq!(error, "MINGIT_PLATFORM_UNSUPPORTED: windows x86");
-    }
-
-    #[test]
-    fn mingit_release_metadata_is_pinned_and_https() {
-        assert!(MINGIT_BASE_URL.starts_with("https://github.com/git-for-windows/git/releases/"));
-        assert!(MINGIT_BASE_URL.contains("v2.53.0.windows.2"));
-        assert_eq!(MINGIT_X64_SHA256.len(), 64);
-        assert_eq!(MINGIT_ARM64_SHA256.len(), 64);
-        assert_ne!(MINGIT_X64_SHA256, MINGIT_ARM64_SHA256);
     }
 
     #[test]

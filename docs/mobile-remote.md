@@ -161,7 +161,7 @@ flowchart LR
 
 1. **DSH API 面**：本壳打包的 DSH 是否具备 `POST /api/<method>`（`client-request` 信封）、
    `/api/events.mux`（下行 WS）、`/api/respond`、`settings.describe`？参考实现要求
-   `@deepseek-ai/dsh@0.1.1-rc.1`+；本壳 DSH 来自 `dsh-tauri-desk/deepseek-harness-pkg`，需核对版本。
+   `@deepseek-ai/dsh@0.1.1-rc.1`+；本壳 DSH 按 DeepSeek 官方 Release tag 安装，需核对版本。
 2. **Node 版本**：本壳捆绑 `v22.22.0`；侧车需用到全局 `WebSocket`/`fetch`（Node 22+ 满足）。
 3. **桥端口**：与 DSH 端口（`DSH_PORT 3080`/`DSH_DEV_PORT 3081`）隔离，避免冲突；参考实现用
    `43127`/`43128`，可沿用并做占用回退。

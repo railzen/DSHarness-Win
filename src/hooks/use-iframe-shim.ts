@@ -4,7 +4,6 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useEffect } from 'react'
 import { useEvent, useInterval, useMountedState } from 'react-use'
-import { queryClient } from '@/config/client'
 import { getIframeOrigin } from '@/utils/iframe'
 
 interface NativeNotificationMessage {
@@ -15,18 +14,6 @@ interface NativeNotificationMessage {
   tag?: string
   sessionId?: string
   requireInteraction?: boolean
-}
-
-/** iframe 插件异常上报消息（dsh-tauri 桥 / 页面脚本 postMessage 通道） */
-interface PluginErrorMessage {
-  source?: 'dsh-plugin-error-bridge'
-  type?: string
-  /** 插件 id（npm 包名） */
-  id?: string
-  /** 异常消息 */
-  error?: string
-  /** 记录动作：runtime / install / update（默认 runtime） */
-  action?: string
 }
 
 /**
@@ -71,37 +58,6 @@ export function useIframeShim(iframeRef: RefObject<HTMLIFrameElement | null>) {
     }).catch(error => console.error('[notification] show_native_notification failed:', error))
   }
 
-  // 接收 iframe 的「插件异常上报」：记录到后端错误注册表并刷新插件列表。
-  // 内嵌页面（或 dsh-tauri 扩展）捕获插件运行期异常后，以
-  // `{ source: 'dsh-plugin-error-bridge', type: 'dsh://plugin-error', id, error }`
-  // postMessage 到宿主，宿主经 `report_plugin_error` 持久化并推送新列表，
-  // 「插件」面板据此展示 danger 图标与更新/卸载入口。
-  function handlePluginError(event: MessageEvent<PluginErrorMessage>) {
-    const data = event.data
-    if (!data || typeof data !== 'object' || data.source !== 'dsh-plugin-error-bridge') {
-      return
-    }
-    if (event.source !== iframeRef.current?.contentWindow) {
-      return
-    }
-    const iframeOrigin = getIframeOrigin(iframeRef)
-    if (!iframeOrigin || event.origin !== iframeOrigin) {
-      return
-    }
-    if (data.type !== 'dsh://plugin-error' || !data.id || !data.error) {
-      return
-    }
-    void invoke('report_plugin_error', {
-      id: data.id,
-      error: data.error,
-      action: data.action ?? 'runtime',
-    })
-      .then(() => {
-        void queryClient.invalidateQueries({ queryKey: ['plugins'] })
-      })
-      .catch(error => console.error('[plugin-error] report_plugin_error failed:', error))
-  }
-
   // 接收 iframe 的「剪贴板图片回退」请求：读取系统剪贴板图片并把 PNG data URL 回传，
   // 使 Linux/WebKitGTK 下 dsh iframe 的贴图（paste 事件拿不到图片）能走原生剪贴板通路。
   function handleClipboardImage(event: MessageEvent<ClipboardImageRequest>) {
@@ -138,7 +94,6 @@ export function useIframeShim(iframeRef: RefObject<HTMLIFrameElement | null>) {
   }
 
   useEvent('message', handleMessage)
-  useEvent('message', handlePluginError)
   useEvent('message', handleClipboardImage)
 
   // 系统通知点击 → 通知 iframe 聚焦对应会话

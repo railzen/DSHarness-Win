@@ -20,8 +20,6 @@ async fn scheduler_permanent_loop(app_handle: AppHandle) {
             log::warn!("tick_check_dsh_process failed: {e}");
         }
         crate::config::check_and_emit_theme(&app_handle);
-        // 已安装插件文件监控：指纹变化（防抖后）推送 `dsh-plugins-updated`
-        crate::service::plugin::watch::check_and_emit(&app_handle);
         interval.tick().await;
     }
 }

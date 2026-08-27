@@ -39,12 +39,6 @@ fn windows_drag_browser_args() -> &'static str {
 
 /// setup app
 pub fn setup(app_handle: tauri::AppHandle) {
-    // 升级清理：内部插件资源已迁至 resources/internal-plugins；旧安装可能保留
-    // resources/preset-plugins 目录。仅删除旧目录，失败告警并继续启动。
-    if let Err(e) = crate::service::plugin::remove_legacy_bundled_plugins(&app_handle) {
-        log::warn!("legacy preset plugins cleanup skipped: {e}");
-    }
-
     // 启动前清扫上次崩溃残留的孤儿 Harness（端口/PID 双重确认，见
     // workflow::sweep_orphan_harness），避免新实例一路漂移端口
     crate::service::workflow::sweep_orphan_harness(&app_handle);
@@ -394,7 +388,7 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
         .disable_drag_drop_handler()
         // 接管内嵌 iframe 的 window.open() / target=_blank 新窗口请求：
         // WebView2 里这类请求走 NewWindowRequested，wry 在没有 handler 时
-        // 直接 SetHandled(true) 吞掉（点了没反应）——dshmarket 等预设插件的
+        // 直接 SetHandled(true) 吞掉（点了没反应）——上游页面的
         // “源码”按钮在桌面端因此无法跳转（浏览器里正常）。
         // 这里把 http(s) 链接交给系统浏览器打开，其余协议一律拒绝。
         .on_new_window(move |url, features| on_new_window(app_handle.clone(), url, features))
@@ -499,20 +493,6 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::bridge::shutdown_harness,
         crate::bridge::restart_harness,
         crate::bridge::get_dsh_status,
-        crate::bridge::get_preinstall_plugins,
-        crate::bridge::get_preinstall_pending,
-        crate::bridge::install_preinstall_plugins,
-        crate::bridge::cancel_preinstall_plugins,
-        crate::bridge::skip_preinstall_plugins,
-        crate::bridge::ensure_internal_plugins,
-        crate::bridge::open_preinstall_repo,
-        crate::bridge::get_dsh_plugins,
-        crate::bridge::refresh_plugin_updates,
-        crate::bridge::update_dsh_plugin,
-        crate::bridge::remove_dsh_plugin,
-        crate::bridge::report_plugin_error,
-        crate::bridge::detect_plugin_recovery,
-        crate::bridge::recover_plugin,
         crate::bridge::get_profiles,
         crate::bridge::create_profile,
         crate::bridge::set_active_profile,

@@ -1,15 +1,13 @@
 import type { PropsWithOverlays } from '@overlastic/react'
-import { Cpu, PersonPencil, Puzzle, Wrench } from '@gravity-ui/icons'
+import { Cpu, PersonPencil, Wrench } from '@gravity-ui/icons'
 import { useEventBus } from '@hairy/react-lib'
 import { cn, Modal } from '@heroui/react'
 import { useDisclosure } from '@overlastic/react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Case, If, Switch } from 'react-if-lite'
-import { useDshPlugins } from '../hooks/use-dsh-plugins'
+import { Case, Switch } from 'react-if-lite'
 import { ConfigCore } from './config-core'
 import { ConfigDebug } from './config-debug'
-import { ConfigPlugin } from './config-plugin'
 import { ConfigProfile } from './config-profile'
 
 export interface ConfigDialogProps extends PropsWithOverlays {}
@@ -17,14 +15,9 @@ export interface ConfigDialogProps extends PropsWithOverlays {}
 export function ConfigDialog(props: ConfigDialogProps) {
   const disclosure = useDisclosure({ props })
   const { t } = useTranslation()
-  // 异常插件数：在「插件」Tab 上给出红点/角标，方便用户直接感知出问题的插件
-  const { plugins } = useDshPlugins()
-  const abnormalCount = plugins.filter(p => p.error != null).length
-
   const navs = [
     { label: t('config.debug'), value: 'debug', icon: Wrench },
     { label: t('config.profiles'), value: 'profiles', icon: PersonPencil },
-    { label: t('config.plugins'), value: 'plugins', icon: Puzzle },
     { label: t('config.harness'), value: 'harness', icon: Cpu },
   ]
 
@@ -59,11 +52,6 @@ export function ConfigDialog(props: ConfigDialogProps) {
                       >
                         <item.icon className="w-5 h-5 mr-2" />
                         <span>{item.label}</span>
-                        <If cond={item.value === 'plugins' && abnormalCount > 0}>
-                          <span className="ml-auto flex size-5 items-center justify-center rounded-full bg-danger text-[10px] font-semibold leading-none text-white">
-                            {abnormalCount}
-                          </span>
-                        </If>
                       </button>
                     )
                   })}
@@ -76,9 +64,6 @@ export function ConfigDialog(props: ConfigDialogProps) {
                   </Case>
                   <Case cond="profiles">
                     <ConfigProfile />
-                  </Case>
-                  <Case cond="plugins">
-                    <ConfigPlugin />
                   </Case>
                   <Case cond="harness">
                     <ConfigCore />

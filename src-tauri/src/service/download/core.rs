@@ -554,21 +554,16 @@ pub async fn ensure_extract<'a, R: Runtime>(
     Ok(())
 }
 
-/// GitHub API 地址（未认证限流 60 次/小时/IP，仅供每次启动检查一次）
-const DSH_PKG_GITHUB_API: &str = "https://api.github.com/repos/dsh-tauri-desk/deepseek-harness-pkg";
-/// pkg 仓库 HTML 来源；`releases.atom` 走 github.com 而非 api.github.com，不受未认证限流约束。
-const DSH_PKG_REPO: &str = "https://github.com/dsh-tauri-desk/deepseek-harness-pkg";
+/// DeepSeek Harness 官方仓库 API。
+const DSH_PKG_GITHUB_API: &str = "https://api.github.com/repos/deepseek-ai/deepseek-harness";
+/// DeepSeek Harness 官方仓库页面地址。
+const DSH_PKG_REPO: &str = "https://github.com/deepseek-ai/deepseek-harness";
 
 /// 最新 Harness 发行版信息（版本 tag + 对应 commit hash）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LatestDshPkg {
     pub tag: String,
     pub commit: String,
-    pub asset_url: String,
-    /// 可信 SHA-256 摘要。为 `None` 表示 GitHub API 限流/不可用未能取得可信摘要，
-    /// 此时该信息**仅可作更新提示**（tag/commit 仍有效），不可用于自动重装——
-    /// 重装路径会因完整性校验缺失而中止（沿用 DSH_INTEGRITY_UNAVAILABLE 安全设计）。
-    pub digest: Option<String>,
 }
 
 /// 构造带 User-Agent 与超时的 GitHub 请求客户端。
@@ -597,14 +592,32 @@ async fn github_api_get(client: &reqwest::Client, url: &str) -> Result<reqwest::
     res.error_for_status().map_err(|e| e.to_string())
 }
 
-/// 拉取最新 release 的 JSON（含 tag、资产、摘要）。
+/// 拉取 Release 列表，并选择第一个合法的官方 DSH tag。
 async fn fetch_releases_latest(client: &reqwest::Client) -> Result<serde_json::Value, String> {
-    github_api_get(client, &format!("{DSH_PKG_GITHUB_API}/releases/latest"))
+    let releases: serde_json::Value = github_api_get(
+        client,
+        &format!("{DSH_PKG_GITHUB_API}/releases?per_page=30"),
+    )
         .await
         .map_err(|e| format!("Latest release request failed: {e}"))?
         .json()
         .await
-        .map_err(|e| format!("Failed to parse latest release response: {e}"))
+        .map_err(|e| format!("Failed to parse latest release response: {e}"))?;
+    releases
+        .as_array()
+        .and_then(|items| {
+            items.iter().find(|item| {
+                item.get("draft").and_then(|value| value.as_bool()) != Some(true)
+                    && item
+                        .get("tag_name")
+                        .and_then(|value| value.as_str())
+                        .filter(|tag| tag.starts_with("dsh-v"))
+                        .and_then(parse_version_from_tag)
+                        .is_some()
+            })
+        })
+        .cloned()
+        .ok_or_else(|| "DSH_RELEASE_NOT_FOUND: no official DSH release found".to_string())
 }
 
 /// 通过 commits 端点把 release tag 解析为完整 commit hash。
@@ -623,12 +636,13 @@ async fn fetch_tag_commit(client: &reqwest::Client, tag: &str) -> Result<String,
         .ok_or_else(|| "Missing sha in release commit response".to_string())
 }
 
-/// 从 tag 内嵌的 build-id 提取 commit 标识：`dsh-0.1.0-rc.8-32331963388` → `32331963388`。
-///
-/// 当 `/commits/{tag}` 因 api.github.com 限流/网络失败时，用 build-id 兜底作为 commit，
-/// 保证「版本升级」判定不因这一次要调用而整体中断（issue：rc.8 发布后无更新提示）。
+/// API 不可用时直接以官方 tag 作为稳定发布标识。
 fn commit_fallback_from_tag(tag: &str) -> String {
-    tag.rsplit('-').next().unwrap_or(tag).to_string()
+    if tag.starts_with("dsh-v") {
+        tag.to_string()
+    } else {
+        tag.rsplit('-').next().unwrap_or(tag).to_string()
+    }
 }
 
 /// 从 releases.atom（github.com，非 api.github.com）解析最新 release tag。
@@ -646,89 +660,22 @@ async fn fetch_latest_dsh_tag_from_atom() -> Result<String, String> {
         .text()
         .await
         .map_err(|e| format!("DSH_ATOM: {e}"))?;
-    // 取第一条 <entry> 作为最新 release，从中提取 releases/tag/<TAG>
-    let entry = body
-        .find("<entry>")
-        .and_then(|p| body[p..].find("</entry>").map(|e| &body[p..p + e]))
-        .unwrap_or(&body);
-    entry
-        .split("releases/tag/")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .filter(|t| !t.is_empty())
-        .map(|t| t.to_string())
-        .ok_or_else(|| "DSH_ATOM: missing tag in atom feed".to_string())
-}
-
-/// 从 expanded_assets HTML 片段中解析指定资产文件名后的 `sha256:<64hex>` 摘要。
-///
-/// 纯函数，便于对真实页面片段做离线单元测试；解析失败返回 `None`。
-fn parse_digest_from_expanded_assets(body: &str, expected_name: &str) -> Option<String> {
-    let pos = body.find(expected_name)?;
-    // 4096 字节窗口的终点回退到 UTF-8 字符边界，避免切片落在多字节字符中间 panic
-    let mut end = (pos + 4096).min(body.len());
-    while end > pos && !body.is_char_boundary(end) {
-        end -= 1;
+    let mut rest = body.as_str();
+    while let Some(position) = rest.find("releases/tag/") {
+        let tail = &rest[position + "releases/tag/".len()..];
+        if let Some(tag) = tail.split('"').next() {
+            if parse_version_from_tag(tag).is_some() {
+                return Ok(tag.to_string());
+            }
+        }
+        rest = &tail[tail.find('"').unwrap_or(tail.len())..];
     }
-    let window = &body[pos..end];
-    const START: &str = "sha256:";
-    let hash_start = window.find(START)?;
-    let hash = &window[hash_start + START.len()..];
-    let hex_end = hash
-        .find(|c: char| !c.is_ascii_hexdigit())
-        .unwrap_or(hash.len());
-    if hex_end != 64 {
-        return None;
-    }
-    Some(format!("sha256:{}", &hash[..64]))
+    Err("DSH_ATOM: missing official tag in atom feed".to_string())
 }
 
-/// 从 release 的 expanded_assets HTML（github.com，非 api.github.com，不受未认证
-/// 限流 403 约束）解析指定资产的 SHA-256 摘要。
-///
-/// GitHub release 资产的 `digest` 字段默认只由 api.github.com 的 JSON 返回，一旦
-/// API 被限流就拿不到可信摘要，更新会因完整性校验缺失被 `DSH_INTEGRITY_UNAVAILABLE`
-/// 卡死。但 GitHub 的 `expanded_assets` 页面片段同样呈现作者填写的 `sha256:<hex>`
-/// 摘要（发行版页面资产区展开时的 HTML），且走 github.com 普通请求、不受 API 配额
-/// 限制——以它作为 API 限流时的非限流兜底来源，保证完整性校验不因 403 而失效。
-async fn fetch_dsh_digest_from_expanded_assets(
-    client: &reqwest::Client,
-    tag: &str,
-    expected_name: &str,
-) -> Result<Option<String>, String> {
-    let body = client
-        .get(format!("{DSH_PKG_REPO}/releases/expanded_assets/{tag}"))
-        .send()
-        .await
-        .map_err(|e| format!("DSH_EXPANDED: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("DSH_EXPANDED: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("DSH_EXPANDED: {e}"))?;
-    Ok(parse_digest_from_expanded_assets(&body, expected_name))
-}
-
-/// 查询 GitHub 上最新 Harness 发行版信息。
-///
-/// 优先走 api.github.com（`/releases/latest` + `/commits/{tag}`），拿到可用的 tag、
-/// 资产地址与可信 SHA-256 摘要。API 限流/网络失败时**不整体中断**：
-/// - tag 兜底用 releases.atom（github.com，不受未认证限流约束）；
-/// - commit 兜底用 tag 内嵌 build-id；
-/// - 资产 URL 由平台确定性推导；
-/// - digest 置 `None`（仅可提示、不可自动重装，重装时重取摘要或安全中止）。
-///
-/// 修复前：api.github.com 一限流 `fetch_latest_dsh_pkg_info` 直接返回 Err，
-/// `check_dsh_update` 静默跳过，导致上游 rc.8 发布后桌面端迟迟不出现更新提示。
+/// 查询官方 GitHub Release，并把 release tag 映射到完全相同版本的官方 npm 包。
 pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
     let client = github_client()?;
-    let expected_name = config::get_dsh_download_url()?
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| "Missing DSH asset filename".to_string())?
-        .to_string();
-
-    // 1. 首选 GitHub API 拉最新 release（含 tag + 资产 + 可信摘要）
     let api_release = match fetch_releases_latest(&client).await {
         Ok(release) => Some(release),
         Err(e) => {
@@ -747,7 +694,6 @@ pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
         }
     };
 
-    // 2. tag：优先 API，失败则从 releases.atom 兜底
     let tag_name = match &api_release {
         Some(release) => release
             .get("tag_name")
@@ -757,15 +703,14 @@ pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
         None => fetch_latest_dsh_tag_from_atom().await?,
     };
 
-    // 3. commit：优先 API /commits/{tag}，失败用 tag 内嵌 build-id 兜底
     let commit = match fetch_tag_commit(&client, &tag_name).await {
         Ok(sha) => sha,
         Err(e) => {
             if crate::service::download::github_api::rate_limited() {
-                log::debug!("GitHub API commit resolution rate-limited, using build-id fallback");
+                log::debug!("GitHub API commit resolution rate-limited, using tag fallback");
             } else {
                 log::warn!(
-                    "Failed to resolve commit for tag {} ({}), using build-id fallback",
+                    "Failed to resolve commit for tag {} ({}), using tag fallback",
                     tag_name,
                     e
                 );
@@ -774,144 +719,44 @@ pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
         }
     };
 
-    // 4. 资产 URL 与摘要：仅 API 可达时资产/摘要可信；否则 URL 平台确定性回退、digest=None
-    let (asset_url, mut digest) = match api_release.as_ref() {
-        Some(release) => {
-            let asset = release
-                .get("assets")
-                .and_then(|value| value.as_array())
-                .and_then(|assets| {
-                    assets.iter().find(|asset| {
-                        asset.get("name").and_then(|value| value.as_str())
-                            == Some(expected_name.as_str())
-                    })
-                });
-            let asset_url = asset
-                .and_then(|a| a.get("browser_download_url").and_then(|v| v.as_str()))
-                .map(|u| u.to_string())
-                .unwrap_or_else(|| config::get_dsh_download_url().unwrap_or_default());
-            let digest = asset
-                .and_then(|a| a.get("digest").and_then(|v| v.as_str()))
-                .filter(|v| v.starts_with("sha256:"))
-                .map(|v| v.to_string());
-            (asset_url, digest)
-        }
-        None => (config::get_dsh_download_url()?, None),
-    };
-
-    // 4b. API 限流/不可用导致取不到可信摘要时，改从 expanded_assets HTML
-    // （github.com，非 api.github.com，不受 403 限流）解析作者填写的 sha256，
-    // 保证完整性校验不因 api.github.com 限流而失效、更新不被卡死。
-    if digest.is_none() {
-        match fetch_dsh_digest_from_expanded_assets(&client, &tag_name, &expected_name).await {
-            Ok(Some(d)) => {
-                log::info!(
-                    "Trusted digest unavailable from GitHub API, recovered from release HTML for {}",
-                    expected_name
-                );
-                digest = Some(d);
-            }
-            Ok(None) => {
-                log::warn!(
-                    "No digest found in release HTML for {} (tag {})",
-                    expected_name,
-                    tag_name
-                );
-            }
-            Err(e) => {
-                log::warn!("Failed to fetch digest from release HTML: {}", e);
-            }
-        }
-    }
+    parse_version_from_tag(&tag_name)
+        .ok_or_else(|| format!("DSH_TAG_INVALID: unsupported official tag {tag_name}"))?;
 
     Ok(LatestDshPkg {
         tag: tag_name,
         commit,
-        asset_url,
-        digest,
     })
 }
 
-/// 拉取指定 tag 的发行版信息（资产 URL + 可信摘要），供核心面板按版本下载。
-///
-/// 与 `fetch_latest_dsh_pkg_info` 同源策略：优先走 api.github.com
-/// （`/releases/tags/{tag}` 拿资产与摘要），失败时资产 URL 平台确定性推导
-/// （latest 地址的 tag 位替换）、摘要走 expanded_assets HTML；digest 仍取不到
-/// 则置 `None`，调用方据此安全中止下载（沿用 DSH_INTEGRITY_UNAVAILABLE 设计）。
+/// 验证指定 tag 是官方 Release，并返回对应的官方 npm 包地址。
 pub async fn fetch_dsh_pkg_asset(tag: &str) -> Result<LatestDshPkg, String> {
     let client = github_client()?;
-    let expected_name = config::get_dsh_download_url()?
-        .rsplit('/')
-        .next()
-        .ok_or_else(|| "Missing DSH asset filename".to_string())?
-        .to_string();
-
-    // 1. 优先 API 拉该 tag 的 release（含资产 + 可信摘要）
-    let release = github_api_get(
+    parse_version_from_tag(tag)
+        .ok_or_else(|| format!("DSH_TAG_INVALID: unsupported official tag {tag}"))?;
+    github_api_get(
         &client,
         &format!("{DSH_PKG_GITHUB_API}/releases/tags/{tag}"),
     )
     .await
     .map_err(|e| format!("Release {tag} request failed: {e}"))?;
-    let json: serde_json::Value = release
-        .json()
+    let commit = fetch_tag_commit(&client, tag)
         .await
-        .map_err(|e| format!("Failed to parse release {tag} response: {e}"))?;
-
-    let asset = json
-        .get("assets")
-        .and_then(|value| value.as_array())
-        .and_then(|assets| {
-            assets.iter().find(|asset| {
-                asset.get("name").and_then(|value| value.as_str()) == Some(expected_name.as_str())
-            })
-        });
-    let asset_url = asset
-        .and_then(|a| a.get("browser_download_url").and_then(|v| v.as_str()))
-        .map(|u| u.to_string())
-        .unwrap_or_else(|| config::get_dsh_download_url_for_tag(tag).unwrap_or_default());
-    let mut digest = asset
-        .and_then(|a| a.get("digest").and_then(|v| v.as_str()))
-        .filter(|v| v.starts_with("sha256:"))
-        .map(|v| v.to_string());
-
-    // 2. 摘要兜底：expanded_assets HTML（github.com，非 api.github.com）
-    if digest.is_none() {
-        match fetch_dsh_digest_from_expanded_assets(&client, tag, &expected_name).await {
-            Ok(Some(d)) => {
-                log::info!(
-                    "Trusted digest unavailable from GitHub API, recovered from release HTML for {}",
-                    expected_name
-                );
-                digest = Some(d);
-            }
-            Ok(None) => {
-                log::warn!(
-                    "No digest found in release HTML for {} (tag {})",
-                    expected_name,
-                    tag
-                );
-            }
-            Err(e) => {
-                log::warn!("Failed to fetch digest from release HTML: {}", e);
-            }
-        }
-    }
+        .unwrap_or_else(|_| commit_fallback_from_tag(tag));
 
     Ok(LatestDshPkg {
         tag: tag.to_string(),
-        commit: commit_fallback_from_tag(tag),
-        asset_url,
-        digest,
+        commit,
     })
 }
 
-/// 从 release tag 中解析版本号：`dsh-0.1.0-rc.7-32054485373` → `0.1.0-rc.7`。
-///
-/// tag 约定为 `dsh-<version>-<commit 后缀>`；格式不符时返回 `None`，
-/// 调用方据此回退到仅 commit 比对的旧行为，避免误判。
+/// 从官方 release tag 中解析版本号：`dsh-v0.1.1-rc.2` → `0.1.1-rc.2`。
 pub fn parse_version_from_tag(tag: &str) -> Option<String> {
-    let version = tag.strip_prefix("dsh-")?.rsplit_once('-')?.0;
+    let version = if let Some(version) = tag.strip_prefix("dsh-v") {
+        version
+    } else {
+        // 兼容旧版桌面端已保存的自建包 tag，仅用于迁移已有安装记录。
+        tag.strip_prefix("dsh-")?.rsplit_once('-')?.0
+    };
     (!version.is_empty()).then(|| version.to_string())
 }
 
@@ -1037,10 +882,117 @@ pub async fn fetch_dsh_pkg_tags() -> Result<Vec<(String, String)>, String> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.get("name")?.as_str()?.to_string();
+            if !name.starts_with("dsh-v") {
+                return None;
+            }
+            parse_version_from_tag(&name)?;
             let sha = entry.get("commit")?.get("sha")?.as_str()?.to_string();
             Some((name, sha))
         })
         .collect())
+}
+
+/// 按官方 GitHub Release tag 安装对应版本的 `@deepseek-ai/dsh`。
+///
+/// 官方 Release 不发布桌面端可直接解压的运行时资产，因此先从 tag 得到精确 npm
+/// 版本，再由捆绑 pnpm 安装完整的官方依赖闭包。pnpm 会按 npm 元数据中的 integrity
+/// 校验 tarball；安装先落入同盘临时目录，结构验证通过后再原子切换。
+pub async fn install_official_dsh(
+    app_handle: &tauri::AppHandle,
+    tag: &str,
+    dest: PathBuf,
+) -> Result<(), String> {
+    let version = parse_version_from_tag(tag)
+        .ok_or_else(|| format!("DSH_TAG_INVALID: unsupported official tag {tag}"))?;
+    let parent = dest
+        .parent()
+        .ok_or_else(|| "DSH_INSTALL_PATH_INVALID: destination has no parent".to_string())?;
+    let leaf = dest
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("dsh");
+    let staging = parent.join(format!(".{leaf}.installing-{}", std::process::id()));
+    let backup = parent.join(format!(".{leaf}.backup"));
+    remove_path_if_exists(&staging).await?;
+    fs::create_dir_all(&staging)
+        .map_err(|e| format!("DSH_STAGING_CREATE_FAILED: {}: {e}", staging.display()))?;
+
+    let manifest = serde_json::json!({
+        "private": true,
+        "dependencies": {
+            "@deepseek-ai/dsh": format!("={version}")
+        }
+    });
+    fs::write(
+        staging.join("package.json"),
+        serde_json::to_vec_pretty(&manifest)
+            .map_err(|e| format!("DSH_MANIFEST_SERIALIZE_FAILED: {e}"))?,
+    )
+    .map_err(|e| format!("DSH_MANIFEST_WRITE_FAILED: {e}"))?;
+    // 与官方 tag 的构建策略保持一致：仅允许运行 Harness 实际需要的原生依赖脚本。
+    let workspace = concat!(
+        "packages: []\n",
+        "allowBuilds:\n",
+        "  '@deepseek-ai/dsh-subprocess-local': true\n",
+        "  '@google/genai': false\n",
+        "  koffi: true\n",
+        "  node-pty: true\n",
+        "  protobufjs: false\n",
+    );
+    fs::write(staging.join("pnpm-workspace.yaml"), workspace)
+        .map_err(|e| format!("DSH_WORKSPACE_WRITE_FAILED: {e}"))?;
+
+    let node = config::get_node_binary_path(app_handle);
+    let pnpm = config::get_pnpm_binary_path(app_handle);
+    if !node.exists() {
+        return Err(format!("NODE_NOT_FOUND: {}", node.display()));
+    }
+    if !pnpm.exists() {
+        return Err(format!("PNPM_NOT_FOUND: {}", pnpm.display()));
+    }
+
+    let install_dir = staging.clone();
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut command = std::process::Command::new(node);
+        command
+            .arg(pnpm)
+            .arg("install")
+            .arg("--prod")
+            .arg("--config.node-linker=hoisted")
+            .arg("--config.auto-install-peers=true")
+            .current_dir(install_dir);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x0800_0000);
+        }
+        command.output()
+    })
+    .await
+    .map_err(|e| format!("DSH_INSTALL_JOIN_FAILED: {e}"))?
+    .map_err(|e| format!("DSH_INSTALL_SPAWN_FAILED: {e}"))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let _ = remove_path_if_exists(&staging).await;
+        return Err(format!(
+            "DSH_INSTALL_FAILED: pnpm exited with {}\n{}{}",
+            output.status,
+            stdout,
+            stderr
+        ));
+    }
+
+    let entry = staging.join("node_modules/@deepseek-ai/dsh/lib/bin.js");
+    if !entry.is_file() {
+        let _ = remove_path_if_exists(&staging).await;
+        return Err(format!(
+            "DSH_INSTALL_INVALID: official package entry missing at {}",
+            entry.display()
+        ));
+    }
+    commit_staged_install(&staging, &dest, &backup).await
 }
 
 #[cfg(test)]
@@ -1090,7 +1042,7 @@ mod tests {
         );
         assert!(validate_download_url("https://registry.npmmirror.com/pnpm/-/pnpm.tgz").is_ok());
         assert!(validate_download_url(
-            "https://ghfast.top/https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/latest/download/deepseek-harness-pkg-windows.zip"
+            "https://ghfast.top/https://github.com/railzen/deepseek-harness-win/releases/download/v1.0.0/deepseek-harness-win.exe"
         )
         .is_ok());
     }
@@ -1137,8 +1089,6 @@ mod tests {
         LatestDshPkg {
             tag: tag.to_string(),
             commit: commit.to_string(),
-            asset_url: "https://example.invalid/dsh.zip".to_string(),
-            digest: Some(format!("sha256:{}", "0".repeat(64))),
         }
     }
 
@@ -1153,54 +1103,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_digest_from_expanded_assets_html() {
-        // 模拟 expanded_assets 片段：资产文件名之后紧跟作者填写的 sha256:<64hex>。
-        // 来自真实 rc.8 页面：windows 资产摘要为 4d541676...
-        let html = concat!(
-            "…/deepseek-harness-pkg-windows.zip…<span>sha256:4d5416766eb4a66e81b83532abeea64de7e7e2e0bac69a4f0c0508e1d91936c0</span>",
-        );
-        let got = parse_digest_from_expanded_assets(html, "deepseek-harness-pkg-windows.zip");
-        assert_eq!(
-            got.as_deref(),
-            Some("sha256:4d5416766eb4a66e81b83532abeea64de7e7e2e0bac69a4f0c0508e1d91936c0")
-        );
-        // 文件名不存在 → None
-        assert_eq!(
-            parse_digest_from_expanded_assets(html, "deepseek-harness-pkg-linux.zip"),
-            None
-        );
-        // 摘要缺失 → None
-        assert_eq!(
-            parse_digest_from_expanded_assets(
-                "<p>no digest here</p>",
-                "deepseek-harness-pkg-windows.zip"
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn parsed_digest_window_clamps_to_char_boundary() {
-        // 构造一个 body 使 `(pos + 4096)` 恰好落在多字节字符的中间字节：
-        // 旧实现 `&body[pos..pos + 4096]` 会在非字符边界切片而 panic，修复后回退到边界再解析。
-        let name = "deepseek-harness-pkg-windows.zip";
-        let digest = "4d5416766eb4a66e81b83532abeea64de7e7e2e0bac69a4f0c0508e1d91936c0";
-        let prefix = format!("{name}<span>sha256:{digest}</span>");
-        let mut body = prefix.clone();
-        // 补齐到字节 4094 处，放一个 3 字节汉字（占用 4094..4097），使索引 4096 落在其中间字节
-        let needed = 4094usize.saturating_sub(body.len());
-        body.push_str(&"a".repeat(needed));
-        body.push('中');
-        body.push_str(&"a".repeat(16));
-        // 确保总长 > 4096，维持 (pos + 4096) 处于非边界字节（否则不会触发回退分支）
-        assert!(body.len() > 4096);
-        let got = parse_digest_from_expanded_assets(&body, name);
-        let expected = format!("sha256:{digest}");
-        assert_eq!(got.as_deref(), Some(expected.as_str()));
-    }
-
-    #[test]
     fn parse_version_from_tag_formats() {
+        assert_eq!(
+            parse_version_from_tag("dsh-v0.1.1-rc.2").as_deref(),
+            Some("0.1.1-rc.2")
+        );
         assert_eq!(
             parse_version_from_tag("dsh-0.1.0-rc.7-32054485373").as_deref(),
             Some("0.1.0-rc.7")

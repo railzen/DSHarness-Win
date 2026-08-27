@@ -20,7 +20,6 @@ import { useStore } from 'valtio-define'
 import { ConfigDialog } from '@/components/config-dialog'
 import { DesktopAboutDialog } from '@/components/desktop-about-dialog'
 import { DesktopUpdateDialog } from '@/components/desktop-update-dialog'
-import { useDshPlugins } from '@/hooks/use-dsh-plugins'
 import { useIframeTauri } from '@/hooks/use-iframe-tauri'
 import { store } from '@/store'
 import { writeClipboardText } from '@/utils/clipboard'
@@ -34,11 +33,10 @@ import { useMacOSAppMenu } from './use-macos-app-menu'
  *
  * - 侧边栏/后退/前进：经 postMessage 操控 iframe 内的 dsh 应用
  *   （`dsh://sidebar:toggle` / `dsh://page:prev` / `dsh://page:next`，
- *   由 dsh-tauri 插件或桌面端注入的导航桥脚本 NAV_SHIM_JS 执行）；
+ *   由桌面端注入的导航桥脚本 NAV_SHIM_JS 执行）；
  *   折叠图标与按钮禁用态由 iframe 回报的
  *   `dsh://sidebar:collapsed` / `dsh://page:firsted` / `dsh://page:lasted` 同步。
- *   左侧控件只在「dsh-tauri 插件已启用（已安装）」且存在 iframe 时渲染：
- *   原生桥缺席时控件没有可靠接收方，避免出现点了没反应的死按钮。
+ *   左侧控件仅在存在 iframe 时渲染，由桌面端注入的导航桥接收。
  * - 空白拖拽区：Tauri 原生 `data-tauri-drag-region`（顶层文档直接生效），
  *   Windows/Linux 上双击切换最大化，macOS 上交由系统标题栏偏好。
  * - macOS：使用原生交通灯，红键后台化、黄键最小化、绿键进入原生全屏；
@@ -46,15 +44,9 @@ import { useMacOSAppMenu } from './use-macos-app-menu'
  * - Windows/Linux：右侧窗口按钮直接调用 Tauri API；
  *   后台化 = 隐藏到托盘（服务保持运行）。
  *
- * 未传入 iframeRef（安装/错误/预装引导页，无 iframe 可操控）时
+ * 未传入 iframeRef（安装/错误页，无 iframe 可操控）时
  * 只渲染窗口控制，不渲染左侧导航控制。
  */
-
-/**
- * dsh-tauri 插件 id：安装后 iframe 内提供 `window.__dsh_tauri_bridge__`
- *  原生导航桥（`useDshPlugins` 实时同步其安装状态，插件增删即时生效）
- */
-const TAURI_PLUGIN_ID = 'dsh-tauri'
 
 /** WKWebView 的 macOS UA 稳定包含 Macintosh，用于切换平台原生窗口 chrome。 */
 function detectMacOS() {
@@ -120,15 +112,12 @@ export interface NavbarProps {
 export function Navbar({ iframeRef }: NavbarProps) {
   const { t } = useTranslation()
   const isFullscreen = useMacOSFullscreen()
-  const { plugins } = useDshPlugins()
   const { sidebarCollapsed, canGoBack, canGoForward, sendNav } = useIframeTauri(iframeRef)
   const { updateInfo } = useStore(store.desktopUpdater)
 
   const openConfigDialog = useOverlay(ConfigDialog)
   const openAboutDialog = useOverlay(DesktopAboutDialog)
   const openUpdateDialog = useOverlay(DesktopUpdateDialog)
-  // 仅当 dsh-tauri 插件启用（已安装）时显示左侧导航控件
-  const tauriEnabled = plugins.some(plugin => plugin.id === TAURI_PLUGIN_ID)
   function handleWindowAction(action: 'minimize' | 'maximize' | 'background') {
     const appWindow = getCurrentWindow()
     switch (action) {
@@ -225,7 +214,7 @@ export function Navbar({ iframeRef }: NavbarProps) {
         },
       )}
     >
-      <If cond={iframeRef != null && tauriEnabled}>
+      <If cond={iframeRef != null}>
         <Button
           className="rounded-lg size-7"
           isIconOnly

@@ -4,7 +4,7 @@ DeepSeek Harness desktop (Tauri 2 + React 19), embeds the Harness UI served at `
 
 - **端口隔离**：release 默认 `3080`，debug（`pnpm tauri dev` / `cargo build`）默认 `3081`，由 `config::setting::default_port()` 用 `cfg!(debug_assertions)` 区分，避免开发时与已运行的桌面端争用端口。
 - **数据隔离（核心共用、数据不共用）**：node/`dependencies/dsh`/`dependencies/pnpm` 为共用核心（AppData）；debug 构建的 `$DSH_HOME` 默认为 `~/.dsh.dev`（`config::runtime::get_dsh_data_path` 用 `cfg!(debug_assertions)` 区分）且 store 用独立文件 `.store.dev.dat`（`config::setting::store_dat_file_name`），避免开发版与生产版会话/档案/端口状态互相污染，也防止 dev 版热重启把 release 的服务进程杀掉（`service/workflow::terminate_stale_harness_processes` 在 debug 下为 no-op，改由 `.dsh.dev/.harness.pid` 精确回收）。debug 构建不迁移旧数据（`service/migrate`）、不注册/注销 PATH、不写烘焙 DSH_HOME 的 `dsh` shim（`service/cli`）。
-- **Windows 极简模式**：预装插件流程（`service/plugin`）对 Windows 用户列出「修复」项（`dsh-win-terminal-inspector`，黄色 chip 默认勾选），确认后 `dsh plugin add github:clearkurt/dsh-win-terminal-inspector` 从 GitHub 安装（桌面端**不内置**插件源码）；随后 `service/workflow/win_inspector.rs`（仅 Windows，幂等）写入 profile `cordis.patch.yml` 挂载行并创作 `$DSH_HOME/.agent-presets/minimal-win/` 用户 preset（Git Bash + danger-full-access，因为 agent preset 组成不受 profile patch 管辖）。
+- **上游插件边界**：桌面端不提供插件市场、预装、升级、卸载或修复功能，只保留 DeepSeek 官方 Release 对应的原生上游插件。
 
 - Prioritize using customized components from src/components, hero-ui.
 - This will help minimize the need for writing custom classes.

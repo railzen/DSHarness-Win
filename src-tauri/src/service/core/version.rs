@@ -59,7 +59,7 @@ fn read_manifest_dsh_version(dir: &Path) -> Option<String> {
         .map(|s| s.trim_start_matches(['^', '~', '=', '>', '<']).to_string())
 }
 
-/// 核心列表：本地核心 + deepseek-harness-pkg 各发布版本（按版本去重）。
+/// 核心列表：本地核心 + DeepSeek 官方 Release 各发布版本（按版本去重）。
 ///
 /// 版本行数据源为 GitHub tags（`fetch_dsh_pkg_tags`，最新在前）。pkg 仓库会对同一
 /// 版本打多个 tag（含测试打包），这里按版本去重——同一版本只保留**最后一个** tag。
@@ -358,7 +358,7 @@ async fn switch_app_version(app_handle: &AppHandle, tag: &str) -> Result<(), Str
     Ok(())
 }
 
-/// 下载指定 tag 的预打包核心到历史槽位 `dependencies/<tag>`（不激活，切换由
+/// 安装指定官方 tag 的核心到历史槽位 `dependencies/<tag>`（不激活，切换由
 /// `set_active` 完成）。幂等：已下载时直接返回该版本行。
 pub async fn download_version(app_handle: &AppHandle, tag: &str) -> Result<HarnessCore, String> {
     // 路径安全：tag 直接进入 `dependencies/<tag>` 槽位路径，需挡 `..`/分隔符
@@ -368,43 +368,29 @@ pub async fn download_version(app_handle: &AppHandle, tag: &str) -> Result<Harne
         return Ok(row_for_tag(app_handle, tag, &dest));
     }
 
-    // 1. 拉该 tag 的资产地址 + 可信摘要（digest 缺失时安全中止，沿用
-    //    DSH_INTEGRITY_UNAVAILABLE 设计：不下载无法验证完整性的内容）
+    // 先验证该 tag 确实属于 DeepSeek 官方 Release。
     let info = download::fetch_dsh_pkg_asset(tag)
         .await
         .map_err(|e| format!("CORE_METADATA_FAILED: {e}"))?;
-    let digest = info.digest.ok_or_else(|| {
-        format!("CORE_INTEGRITY_UNAVAILABLE: trusted SHA-256 unavailable for {tag}, cannot download safely")
-    })?;
 
-    // 2. 下载 + 校验 + 原子解压到历史槽位（两阶段进度：下载 0-50，解压 50-100）
-    //    下载默认走 GitHub 官方直连，失败自动切换 ghfast.top 镜像兜底。
+    // 官方 Release 无预构建依赖包，按 tag 安装对应的官方 npm 版本。
     let window = app_handle
         .get_webview_window("main")
         .ok_or("WINDOW_NOT_FOUND: main window missing")?;
     let mut tracker = download::ProgressTracker::new(&window, 2);
-    tracker.start_phase("download", &format!("正在下载核心版本 {tag}"));
-    let urls = vec![
-        info.asset_url.clone(),
-        config::mirror_download_url(&info.asset_url),
-    ];
-    let buffer = download::download_file_from_sources(&tracker, urls)
-        .await
-        .map_err(|e| format!("CORE_DOWNLOAD_FAILED: {e}"))?;
-    download::verify_sha256(&buffer, &digest).map_err(|e| format!("CORE_INTEGRITY_FAILED: {e}"))?;
+    tracker.start_phase("download", &format!("正在解析官方核心版本 {tag}"));
+    tracker.update(
+        100.0,
+        format!("已确认官方 Release：{}", info.tag),
+        format!("Verified official DeepSeek Harness release {}", info.tag),
+    );
     tracker.end_phase();
-    let name = info
-        .asset_url
-        .rsplit('/')
-        .next()
-        .unwrap_or(&info.asset_url)
-        .to_string();
-    tracker.start_phase("extract", &format!("正在解压核心版本 {tag}"));
-    download::ensure_extract(&tracker, name, buffer, dest.clone())
+    tracker.start_phase("extract", &format!("正在安装核心版本 {tag}"));
+    download::install_official_dsh(app_handle, tag, dest.clone())
         .await
-        .map_err(|e| format!("CORE_EXTRACT_FAILED: {e}"))?;
+        .map_err(|e| format!("CORE_INSTALL_FAILED: {e}"))?;
     tracker.end_phase();
-    log::info!("Downloaded dsh core {tag} to {}", dest.display());
+    log::info!("Installed official dsh core {tag} to {}", dest.display());
 
     Ok(row_for_tag(app_handle, tag, &dest))
 }

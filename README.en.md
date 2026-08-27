@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/hairyf/deepseek-harness-desktop">
+  <a href="https://github.com/railzen/deepseek-harness-win">
     <img src="public/favicon.svg" width="96" alt="DeepSeek Harness Desktop" />
   </a>
 </p>
@@ -12,12 +12,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hairyf/deepseek-harness-desktop/releases">
-    <img src="https://img.shields.io/github/v/release/hairyf/deepseek-harness-desktop?style=flat-square&label=release&color=4D6BFE" alt="Release" />
+  <a href="https://github.com/railzen/deepseek-harness-win/releases">
+    <img src="https://img.shields.io/github/v/release/railzen/deepseek-harness-win?style=flat-square&label=release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/github/downloads/hairyf/deepseek-harness-desktop/total?style=flat-square&label=downloads&color=4D6BFE" alt="Downloads" />
-  <img src="https://img.shields.io/github/stars/hairyf/deepseek-harness-desktop?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
-  <img src="https://img.shields.io/github/license/hairyf/deepseek-harness-desktop?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
+  <img src="https://img.shields.io/github/downloads/railzen/deepseek-harness-win/total?style=flat-square&label=downloads&color=4D6BFE" alt="Downloads" />
+  <img src="https://img.shields.io/github/stars/railzen/deepseek-harness-win?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
+  <img src="https://img.shields.io/github/license/railzen/deepseek-harness-win?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Windows | macOS | Linux" />
 </p>
 
@@ -42,47 +42,16 @@
 
 - ⚡️ **Zero setup** — First launch needs no Node runtime or Harness core; uses the local environment by default and does not modify your existing system environment.
 - 🔄 **Core update** — Syncs the latest upstream Harness version in-app, so upstream updates take effect without reinstalling; supports managing multiple core versions.
-- 🖥️ **Config** — One dialog for Debug / Profiles / Plugins / Core, with bilingual (zh/en) UI labels and dark-mode support.
-- 🗂️ **Profile isolation** — Profiles are isolated from each other in the config; plugins, patches, and settings stay independent and do not interfere.
-- 🧩 **Plugin management** — The plugin panel manages installed plugins; when something misbehaves it offers upgrade / uninstall entry points plus error details.
-- 🎁 **Built-in plugins** — Ships with bundled plugins; more high-quality built-in plugins are coming in the future.
+- 🖥️ **Config** — One dialog for Debug / Profiles / Core, with bilingual (zh/en) UI labels and dark-mode support.
+- 🗂️ **Profile isolation** — Profiles keep Harness settings isolated from each other.
+- 🧩 **Native upstream** — Installs only Harness and plugins belonging to the selected official DeepSeek Release tag.
 - 🪶 **Native & lightweight** — A Tauri 2 shell (not Electron): smaller installers, lower memory, native windows.
 - ⌨️ **CLI integration** — Install automatically registers the `dsh` command, ready in a new terminal; does not overwrite your existing shell config.
-- 🧭 **Launch wizard** — On first launch, choose recommended plugins, or re-select them later in config.
 - 🚀 **Self-update** — In-app updates; no need to re-download.
-
-## Presets
-
-Plugins offered in the first-run wizard; select what you need and install on demand:
-
-- [DSH Win Terminal Inspector](https://github.com/clearkurt/dsh-win-terminal-inspector) — Windows-only fix for Minimal mode
-- [DSH Market](https://github.com/dsh-market/dsh-market) — browse, search, and one-click install community plugins (Recommended)
-- [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — a VSCode-like right sidebar, isolated per session (Recommended)
-- [DSH Notification](https://github.com/omdsh-dev/dsh-notification) — desktop notifications when a turn completes
-- [DSH Session Context Menu](https://github.com/baihejiangnan/dsh-session-context-menu) — DSH right-click menu: adds common actions for sessions, workspaces, the input box, and links
-
-> Want to add new presets? Modify [preset-plugins.json](https://github.com/hairyf/deepseek-harness-desktop/blob/main/src-tauri/resources/preset-plugins.json) and submit a PR — once approved, it will be added as a preset in a future version.
-
-## Built-in plugins
-
-First-party plugins bundled with the installer:
-
-- [DSH Tauri](https://github.com/dsh-tauri-desk/dsh-tauri) — provides a communication channel with the Tauri 2 shell
-- [DSH Tauri UI](https://github.com/dsh-tauri-desk/dsh-tauri-ui) — provides a custom settings sidebar for the Tauri 2 shell
-- [DSH Tauri Worktree](https://github.com/dsh-tauri-desk/dsh-tauri-worktree) — creates an isolated Git worktree per session, with checkout to a local branch or archive-and-abandon flows
-- [DSH Tauri Panel](https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-panel) — sidebar shell: compact logo row, a panel area (New Session + third-party panel items via `sidebar.panel.action`), and the `panel.protocol` service
-- [DSH Tauri Panel Extension](https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-panel-extension) — Skills and MCP management with skill repository import
-- More plugins coming soon...
 
 ## Quick Start
 
-Download the installer for your platform from [Releases](https://github.com/hairyf/deepseek-harness-desktop/releases), install, and launch.
-
-**macOS (Homebrew):** you can also install it in one command via Homebrew:
-
-```bash
-brew install dsh-tauri-desk/desktop/deepseek-harness
-```
+Download the installer for your platform from [Releases](https://github.com/railzen/deepseek-harness-win/releases), install, and launch.
 
 The first run downloads the Node runtime and Harness core (if `dsh` is already installed, the installed version is used), then takes you straight into the harness at `http://127.0.0.1:3080`; after that everything runs locally — no network required.
 
@@ -108,14 +77,13 @@ Want to get involved in development? See [docs/DEVELOPMENT.md](./docs/DEVELOPMEN
 │   service/download  installer + extraction   │
 │   service/core      Harness core versions    │
 │   service/profile   dsh profile management   │
-│   service/plugin    plugin remove / upgrade  │
 │   service/cli       dsh command shim + PATH  │
 │   service/update    desktop self-update      │
 │   service/workflow  dsh process lifecycle    │
 │   task              dsh health checks        │
 └──────┬───────────────────────────┬───────────┘
        │                           │
-  runtime/ (Node.js v22.22.0)   dependencies/dsh/ (prebuilt bundle)
+  runtime/ (Node.js v22.22.0)   dependencies/dsh/ (official release)
        └─────────────┬─────────────┘
                      ▼
    dsh --profile <profile> --host 127.0.0.1 --port 3080
@@ -124,7 +92,7 @@ Want to get involved in development? See [docs/DEVELOPMENT.md](./docs/DEVELOPMEN
         http://127.0.0.1:3080/  ← embedded UI
 ```
 
-The prebuilt Harness bundle is published by [deepseek-harness-pkg](https://github.com/dsh-tauri-desk/deepseek-harness-pkg). Every launch compares against the latest release and prompts you to download the update when the local one is outdated — keeping the local install when GitHub is unreachable. A local core installed globally via the CLI is preferred when present.
+Harness is installed from the exact `@deepseek-ai/dsh` version represented by the [official DeepSeek Release tag](https://github.com/deepseek-ai/deepseek-harness/releases). Desktop self-update checks only this project's Releases; no Releases means the installed desktop is treated as current.
 
 ## Notes
 
@@ -137,7 +105,6 @@ The prebuilt Harness bundle is published by [deepseek-harness-pkg](https://githu
 ## Related
 
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — the upstream `dsh` agent platform
-- [deepseek-harness-pkg](https://github.com/dsh-tauri-desk/deepseek-harness-pkg) — prebuilt Harness bundles consumed by this app
 - [n8n-desktop](https://github.com/tangtao646/n8n-desktop) — reference implementation
 
 ## License

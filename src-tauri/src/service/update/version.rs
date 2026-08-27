@@ -18,14 +18,6 @@ pub(super) fn parse_version(v: &str) -> Option<Version> {
     Version::parse(v.trim().trim_start_matches('v')).ok()
 }
 
-/// 是否「正式版」：纯数字版本，无 pre-release 与 build metadata（如 `0.7.14`）。
-///
-/// 更新通知只发给正式版：`0.7.14-rc.1` / `0.7.14-beta` 等 pre-release 一律跳过，
-/// 用户不会收到非正式版的更新提示（见 [`super::meta`]）。
-pub(super) fn is_stable(version: &Version) -> bool {
-    version.pre.is_empty() && version.build.is_empty()
-}
-
 /// 判断 `latest` 是否严格高于 `current`（semver 语义）。
 ///
 /// 注意 `0.7.14 > 0.7.14-rc.1`：装了 rc 的用户也能收到同号正式版的通知，
@@ -172,16 +164,6 @@ mod tests {
         assert!(!is_newer("abc", "0.5.1"));
         assert!(!is_newer("0.5.1", "abc"));
         assert!(!is_newer("test-main-123", "0.5.1"));
-    }
-
-    #[test]
-    fn is_stable_only_pure_numeric() {
-        assert!(is_stable(&parse_version("0.7.14").unwrap()));
-        assert!(is_stable(&parse_version("0.7.0").unwrap()));
-        assert!(!is_stable(&parse_version("0.7.14-rc.1").unwrap()));
-        assert!(!is_stable(&parse_version("0.7.14-beta.2").unwrap()));
-        assert!(!is_stable(&parse_version("0.7.14-alpha").unwrap()));
-        assert!(!is_stable(&parse_version("0.7.14+build.5").unwrap()));
     }
 
     #[test]

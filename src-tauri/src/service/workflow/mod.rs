@@ -1,11 +1,7 @@
-pub(crate) mod client_hmr_patch;
-pub(crate) mod renderer_patch;
 pub mod status;
 pub mod utils;
-pub(crate) mod win_inspector;
 #[cfg(windows)]
 pub(crate) mod win_spawn;
-pub(crate) mod workspace_patch;
 
 use crate::config;
 use crate::service::download;
@@ -781,51 +777,6 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     #[cfg(unix)]
     warn_if_inotify_watch_limit_low();
 
-    // Windows 极简模式修复的自愈：插件已装入 profile 时确保 patch 挂载行与
-    // minimal-win 用户 preset 落盘（幂等）。最佳努力：失败只告警，不阻断启动。
-    if let Err(e) = win_inspector::apply(&app_handle) {
-        log::warn!("win32 terminal support apply failed: {e}");
-    }
-    // renderer 的 SlotOutlet 一行导出补丁（dsh-tauri-ui 设置侧边栏依赖）：只补
-    // 活动核心的 dsh-client-ui-renderer lib/client.js，已含导出即跳过（幂等；核心
-    // 换版本后自动重打，上游官方导出后自动退休）。最佳努力：失败只告警，不阻断
-    // 启动——未打补丁时插件侧降级，官方设置 dialog 照常工作，绝不白屏。
-    if let Err(e) = renderer_patch::apply(&app_handle) {
-        log::warn!("renderer SlotOutlet patch failed: {e}");
-    }
-    // worktree 会话以隔离 cwd 执行，但产品归属仍是源 Workspace；放宽上游显式
-    // attach 的 cwd 相等约束，其他 cwd 有效性校验保持不变。最佳努力且幂等。
-    if let Err(e) = workspace_patch::apply(&app_handle) {
-        log::warn!("workspace worktree membership patch failed: {e}");
-    }
-    // 当前 DSH client-HMR 会卸载第三方插件却不重新挂载。debug 直接联接本地
-    // 插件源码，故将 rebuilt 降级为自动刷新页面；release 保持上游行为。
-    if let Err(e) = client_hmr_patch::apply(&app_handle) {
-        log::warn!("debug client plugin reload fallback patch failed: {e}");
-    }
-    // 预防性处理：pnpm 在无 TTY 环境（dsh-market 等子进程）下重装/更新插件时，
-    // 清理/重建 node_modules 会触发交互确认并因无 TTY 直接中止
-    // （ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY），表现为插件更新失败。
-    // 启动时确保 profile 的 .npmrc 写入 confirmModulesPurge=false（幂等、保留
-    // 已有配置）。最佳努力：失败只告警，不阻断启动。
-    if let Err(e) = crate::service::plugin::ensure_profile_npmrc(&app_handle) {
-        log::warn!("ensure profile .npmrc failed: {e}");
-    }
-    // 内置插件自愈：随包分发的内置插件（dsh-tauri 等）必须在服务进程加载插件
-    // 前就绪——核对「已安装 + 安装路径指向当前捆绑目录」，未安装、路径不正确
-    // 或用户卸载后重启，一律强制重装（见 service::plugin::internal）。最佳
-    // 努力：失败只告警，不阻断启动（核心功能缺失是发布缺陷，由 prebuild 报错）。
-    if let Err(e) = crate::service::plugin::ensure_internal_plugins(&app_handle).await {
-        log::warn!("ensure internal plugins failed: {e}");
-    }
-    // 预装插件完整性自检：清单引用的预装插件若在 node_modules 缺失产物，服务
-    // 启动时 loader 会对每个缺失插件抛 ERR_MODULE_NOT_FOUND 而整体失败（issue
-    // #90，日志特征 `Cannot find package`）。用 `pnpm install` 以现有 manifest +
-    // lockfile 为准重建依赖图修复；修复失败只告警并给缺失插件记录错误标记
-    // （启动失败场景由前端 recovery 对话框兜底，见 service::plugin::recovery）。
-    if let Err(e) = crate::service::plugin::ensure_preset_plugins(&app_handle).await {
-        log::warn!("ensure preset plugins failed: {e}");
-    }
     let mut envs: HashMap<String, String> = HashMap::new();
     envs.insert(
         "DSH_HOME".to_string(),
@@ -834,12 +785,8 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
     envs.insert("DSH_TELEMETRY_DISABLED".to_string(), "1".to_string());
     envs.insert("NO_COLOR".to_string(), "1".to_string());
     envs.insert("DSH_WEB_PORT".to_string(), setting.port.to_string());
-    // 把服务实际使用的 node 路径显式交给子进程（pnpm/dsh shim 的 DSH_NODE
-    // 优先）：市场（dsh-market）等子进程经 PATH 解析 node 可能与桌面端预检
-    // 不一致（相对 PATH 条目 / junction / 子进程 PATH 布局差异），导致 pnpm
-    // shim 报 "Node.js runtime not found"（issue #121，与 build_plugin_envs
-    // 的注入保持一致）。先规范化为绝对路径：相对路径在子进程 CWD 下会解析
-    // 到错误位置；已存在（上面校验过）的 node 可安全 canonicalize。
+    // 把服务实际使用的 node 路径显式交给子进程。先规范化为绝对路径，避免
+    // 相对 PATH 条目在 Harness 工作目录下解析到错误位置。
     let node_abs =
         std::fs::canonicalize(&node_binary_path).unwrap_or_else(|_| node_binary_path.clone());
     envs.insert(
@@ -847,58 +794,15 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         node_abs.to_string_lossy().into_owned(),
     );
 
-    // 扩展 PATH，让 dsh 及其子进程能找到 node 与桌面端自动配置的 Git；Windows
-    // 上再注入 Git Bash 的 bin 目录：persistent bash（--noprofile --norc）不执行
-    // profile 脚本、PATH
-    // 完全继承服务进程，若不含 Git 的 usr/bin，ls/sed/find 等 coreutils 全会
-    // `command not found`（MSYS 运行时在部分环境下不会自动补 /usr/bin）。
-    // 前置应用自身的 shim 目录，使市场（dsh-market）及其子进程通过名字解析的
-    // `pnpm`/`dsh` 都命中桌面端 shim，从而受桌面端 pnpm 选版策略管辖
-    // （轻量缓解，issue #69 系列）。
+    // 扩展 PATH，让 dsh 及其子进程能找到当前选定的 node。
     if let Some(node_dir) = node_binary_path.parent() {
         if let Some(existing_path) = std::env::var_os("PATH") {
-            let git_dirs = win_inspector::git_bash_bin_dirs();
-            // 只打印注入的前缀目录，完整 PATH 太长会刷屏
-            for dir in &git_dirs {
-                log::debug!("harness service PATH prepend: {}", dir.to_string_lossy());
-            }
-            let mut paths = vec![crate::service::cli::get_bin_dir(&app_handle)];
-            paths.push(node_dir.to_path_buf());
-            if let Some(git_dir) = config::get_git_cmd_dir(&app_handle) {
-                log::debug!(
-                    "harness service Git PATH prepend: {}",
-                    git_dir.to_string_lossy()
-                );
-                paths.push(git_dir);
-            }
-            paths.extend(git_dirs);
+            let mut paths = vec![node_dir.to_path_buf()];
             paths.extend(std::env::split_paths(&existing_path));
             if let Ok(new_path) = std::env::join_paths(paths) {
                 envs.insert("PATH".to_string(), new_path.to_string_lossy().into_owned());
             }
         }
-    }
-
-    // GUI 进程可能启动在 pnpm 安装之前，继承的 PATH 因而没有 npm 全局目录。
-    // 直接注入探测到的绝对路径，避免 dsh-market 的 pnpm --version 落到自身 shim
-    // 后又因 PATH 看不到真正的 pnpm（issue #139）。
-    if let Some(user_pnpm) = crate::service::cli::find_user_pnpm(&app_handle) {
-        // Unix mise shim 依赖调用路径中的 argv[0]；只做字面绝对化，不能解析
-        // `pnpm -> mise` 链接。Windows 仍由同一辅助函数处理连接点与 `\\?\`。
-        if let Some(pnpm_value) = crate::service::cli::pnpm_env_value(
-            &user_pnpm,
-            &crate::service::cli::get_bin_dir(&app_handle),
-        ) {
-            envs.insert("DSH_PNPM".to_string(), pnpm_value);
-        }
-    }
-
-    // 让市场子进程的 pnpm 与桌面端同一套受控策略（store 主版本感知、避免落到系统
-    // homebrew pnpm）。与插件安装路径的 ensure_pnpm 版本感知一致，但启动阶段绝不
-    // 触发下载；捆绑版未安装或与 store 不匹配时不注入（交由用户 pnpm）。
-    // 最佳努力：失败只告警，不阻断启动。
-    if crate::service::plugin::harness_prefer_bundled_pnpm(&app_handle) {
-        envs.insert("DSH_PREFER_BUNDLED_PNPM".to_string(), "1".to_string());
     }
 
     // 日志文件（前端日志面板读取）。
@@ -1068,17 +972,16 @@ pub fn stop_on_exit(app_handle: tauri::AppHandle, _port: u16) {
     let _ = fs::remove_file(harness_pid_path(&app_handle));
 }
 
-/// 安装环境（Node.js 运行时 + 打包的 Harness 发行版 + pnpm；Windows 缺失
-/// 系统 Git 时再自动安装免安装 MinGit）。
+/// 安装环境（Node.js 运行时 + pnpm + 官方 Harness Release 对应的 npm 包）。
 ///
 /// 返回是否真正落盘更新了 Harness（dsh 任务实际下载并解压）；仅重装
-/// Node/pnpm/Git 或全部任务被跳过时返回 false，供调用方决定是否重启页面。
+/// Node/pnpm 或全部任务被跳过时返回 false，供调用方决定是否重启页面。
 pub async fn install(
     app_handle: &tauri::AppHandle,
     mut dsh_latest: Option<download::LatestDshPkg>,
 ) -> Result<bool, String> {
     log::info!("Starting installation process");
-    // dsh 任务（index==1）实际下载解压时置 true
+    // dsh 任务（index==2）实际安装时置 true
     let mut dsh_updated = false;
 
     // 安装前先停止本应用持有的 Harness 服务：运行中的 node 进程会把
@@ -1107,15 +1010,11 @@ pub async fn install(
         .get_webview_window("main")
         .ok_or("Failed to get main window")?;
     log::debug!("Main window obtained");
-    let mut tasks: Vec<Box<dyn download::Installable>> = vec![
+    let tasks: Vec<Box<dyn download::Installable>> = vec![
         Box::new(download::Nodejs),
-        Box::new(download::Dsh),
         Box::new(download::Pnpm),
+        Box::new(download::Dsh),
     ];
-    // Windows Sandbox 等空白环境没有 Git；仅 Windows 加入第 4 项，若系统 Git
-    // 可真实执行则 Installable 会跳过，不重复下载也不修改系统 PATH。
-    #[cfg(windows)]
-    tasks.push(Box::new(download::Git));
     // 每项均有下载/解压两个阶段，按实际平台任务数计算，避免进度提前到 100%。
     let mut tracker = download::ProgressTracker::new(&window, tasks.len() * 2);
     log::info!("Task list created, {} tasks total", tasks.len());
@@ -1127,7 +1026,7 @@ pub async fn install(
         // 同一 git commit（record_commit 不变），只比 commit 会把 rc.8 之于
         // rc.7 误判为"已最新"而跳过下载——日志表现为"All installation tasks
         // completed"但实际什么都没下载，重启后仍是旧版，且前端丢掉更新提示。
-        let outdated = index == 1
+        let outdated = index == 2
             && dsh_latest.as_ref().is_some_and(|info| {
                 let installed_version = config::get_dsh_version(app_handle);
                 let latest_version = download::parse_version_from_tag(&info.tag);
@@ -1159,6 +1058,43 @@ pub async fn install(
 
         log::info!("Task {} not installed, starting installation", index + 1);
 
+        // 官方 GitHub Release 只提供源码归档，不提供可直接运行的完整依赖包。
+        // dsh 任务按 release tag 映射到完全相同版本的官方 npm 包，由捆绑 pnpm
+        // 校验 npm integrity 并安装官方依赖闭包。
+        if index == 2 {
+            if dsh_latest.is_none() {
+                dsh_latest = Some(download::fetch_latest_dsh_pkg_info().await?);
+            }
+            let info = dsh_latest
+                .as_ref()
+                .ok_or_else(|| "DSH_RELEASE_NOT_FOUND: no official release found".to_string())?;
+            tracker.start_phase(
+                "download",
+                &format!("{} {}", config::i18n::t("install.downloading"), task.title()),
+            );
+            tracker.update(
+                100.0,
+                format!("已解析官方 Release：{}", info.tag),
+                format!("Resolved official DeepSeek Harness release {}", info.tag),
+            );
+            tracker.end_phase();
+            tracker.start_phase(
+                "extract",
+                &format!("{} {}", config::i18n::t("install.extracting"), task.title()),
+            );
+            download::install_official_dsh(
+                app_handle,
+                &info.tag,
+                task.get_install_path(app_handle),
+            )
+            .await?;
+            tracker.end_phase();
+            dsh_updated = true;
+            config::set_dsh_pkg_commit(app_handle, info.commit.clone());
+            config::set_dsh_pkg_tag(app_handle, info.tag.clone());
+            continue;
+        }
+
         // 1. 下载
         tracker.start_phase(
             "download",
@@ -1168,24 +1104,9 @@ pub async fn install(
                 task.title()
             ),
         );
-        // 下载 URL 对 dsh 也是完全确定可算的（DSH_CORE_URL + 平台文件名），
-        // 无需依赖 GitHub API 元数据；api.github.com 限流/被代理拦截时
-        // （mac 首次启动常见）仍能拿到真实下载地址，避免整次安装被瞬时失败卡死。
-        // dsh 核心默认先走 GitHub 官方直连，失败自动切换 ghfast.top 镜像兜底
-        // （下载层会在界面上告知用户）；其余任务保持单一官方源。
-        let (urls, name) = if index == 1 {
-            let urls = config::get_dsh_download_urls()?;
-            let name = urls
-                .first()
-                .and_then(|u| u.rsplit('/').next())
-                .unwrap_or("")
-                .to_string();
-            (urls, name)
-        } else {
-            let url = task.get_download_url()?;
-            let name = url.rsplit('/').next().unwrap_or("").to_string();
-            (vec![url], name)
-        };
+        let url = task.get_download_url()?;
+        let name = url.rsplit('/').next().unwrap_or("").to_string();
+        let urls = vec![url];
         // 取文件名用于解压类型判定；下载 URL 正常必含 '/'，但这里不 panic，
         // 防御性兜底为空串（后续 ensure_extract 会因无法判定类型而报错返回，
         // 不再让进程崩溃）。
@@ -1195,48 +1116,7 @@ pub async fn install(
         log::info!("Download completed, file size: {} bytes", buffer.len());
         let expected_digest = match index {
             0 => download::fetch_node_sha256(task.get_download_url()?.as_str()).await?,
-            1 => {
-                // dsh 的 SHA-256 digest 只能来自 GitHub release asset 元数据
-                // （安全设计，见 dsh_INTEGRITY_UNAVAILABLE）。首次安装时该元数据
-                // 可能因 api.github.com 限流/网络抖动而缺失（mac 首次启动常见，
-                // issue #31），这里带退避重取，避免启动被瞬时失败卡死。
-                if dsh_latest.is_none() {
-                    for attempt in 0..3 {
-                        match download::fetch_latest_dsh_pkg_info().await {
-                            Ok(info) => {
-                                dsh_latest = Some(info);
-                                break;
-                            }
-                            Err(e) if attempt < 2 => {
-                                log::warn!(
-                                    "Retrying dsh release metadata fetch ({}/3), will retry: {}",
-                                    attempt + 1,
-                                    e
-                                );
-                                tokio::time::sleep(std::time::Duration::from_millis(
-                                    500 * (attempt as u64 + 1),
-                                ))
-                                .await;
-                            }
-                            Err(e) => {
-                                return Err(format!(
-                                    "DSH_INTEGRITY_UNAVAILABLE: 无法获取 Harness 发行版的完整性校验信息（{}），请检查网络后重试",
-                                    e
-                                ));
-                            }
-                        }
-                    }
-                }
-                dsh_latest
-                    .as_ref()
-                    .and_then(|info| info.digest.clone())
-                    .ok_or_else(|| {
-                        "DSH_INTEGRITY_UNAVAILABLE: trusted release digest is required".to_string()
-                    })?
-            }
-            2 => config::PNPM_SHA256.to_string(),
-            #[cfg(windows)]
-            3 => config::get_mingit_sha256()?.to_string(),
+            1 => config::PNPM_SHA256.to_string(),
             _ => return Err("INSTALL_TASK_INVALID: unknown install task".to_string()),
         };
         download::verify_sha256(&buffer, &expected_digest)?;
@@ -1254,14 +1134,6 @@ pub async fn install(
         log::info!("Extraction completed");
         tracker.end_phase();
 
-        // 记录本次安装对应的 release tag 与 commit，供下次启动比对
-        if index == 1 {
-            dsh_updated = true;
-            if let Some(info) = &dsh_latest {
-                config::set_dsh_pkg_commit(app_handle, info.commit.clone());
-                config::set_dsh_pkg_tag(app_handle, info.tag.clone());
-            }
-        }
     }
 
     log::info!("All installation tasks completed");

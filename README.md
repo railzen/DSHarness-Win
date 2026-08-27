@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/hairyf/deepseek-harness-desktop">
+  <a href="https://github.com/railzen/deepseek-harness-win">
     <img src="public/favicon.svg" width="96" alt="DeepSeek Harness Desktop" />
   </a>
 </p>
@@ -12,12 +12,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/hairyf/deepseek-harness-desktop/releases">
-    <img src="https://img.shields.io/github/v/release/hairyf/deepseek-harness-desktop?style=flat-square&label=release&color=4D6BFE" alt="Release" />
+  <a href="https://github.com/railzen/deepseek-harness-win/releases">
+    <img src="https://img.shields.io/github/v/release/railzen/deepseek-harness-win?style=flat-square&label=release&color=4D6BFE" alt="Release" />
   </a>
-  <img src="https://img.shields.io/github/downloads/hairyf/deepseek-harness-desktop/total?style=flat-square&label=downloads&color=4D6BFE" alt="Downloads" />
-  <img src="https://img.shields.io/github/stars/hairyf/deepseek-harness-desktop?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
-  <img src="https://img.shields.io/github/license/hairyf/deepseek-harness-desktop?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
+  <img src="https://img.shields.io/github/downloads/railzen/deepseek-harness-win/total?style=flat-square&label=downloads&color=4D6BFE" alt="Downloads" />
+  <img src="https://img.shields.io/github/stars/railzen/deepseek-harness-win?style=flat-square&label=stars&color=4D6BFE" alt="Stars" />
+  <img src="https://img.shields.io/github/license/railzen/deepseek-harness-win?style=flat-square&label=license&color=4D6BFE" alt="MIT License" />
   <img src="https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-black?style=flat-square" alt="Windows | macOS | Linux" />
 </p>
 
@@ -38,45 +38,14 @@
   </tr>
 </table>
 
-- 🧩 **插件管理** — 插件面板管理已安装插件，出现异常时提供升级 / 卸载入口，错误详情。
-- 🎁 **内置插件** — 随安装包内置插件，以及将来引入更多高质量的内置插件。
+- 🧩 **原生上游** — 仅安装 DeepSeek 官方 Release tag 对应的 Harness 与上游插件。
 - 🪶 **原生轻量** — Tauri 2 外壳（非 Electron）：更小的安装包、更低的内存占用、原生窗口。
 - ⌨️ **命令行集成** — 安装自动注册 `dsh` 命令，新开终端即用；不覆盖你已有 shell 配置。
-- 🧭 **启动引导** — 首次启动可选推荐插件，也可在配置中重新选择。
 - 🚀 **自更新** — 应用内更新，不需要在重新下载；
-
-## 预设插件
-
-首次启动引导中提供的插件，按需勾选安装：
-
-- [DSH Win Terminal Inspector](https://github.com/clearkurt/dsh-win-terminal-inspector) — Windows 极简模式修复
-- [DSH Market](https://github.com/dsh-market/dsh-market) — 浏览、搜索并一键安装社区插件（推荐）
-- [DSH Better Sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) — 类 VSCode 右侧栏，按会话隔离（推荐）
-- [DSH Notification](https://github.com/omdsh-dev/dsh-notification) — 回合完成时的桌面通知
-- [DSH Session Context Menu](https://github.com/baihejiangnan/dsh-session-context-menu) — DSH 右键菜单：为会话、工作区、输入框和链接补充常用操作
-
-> 你想收录新的插件作为预设？修改 [preset-plugins.json](https://github.com/hairyf/deepseek-harness-desktop/blob/main/src-tauri/resources/preset-plugins.json) 并提交 PR，通过后将在将来版本新增为预设插件。
-
-## 内置插件
-
-随安装包资源内置的第一方插件：
-
-- [DSH Tauri](https://github.com/dsh-tauri-desk/dsh-tauri) — 提供与 Tauri 2 外壳的通信通道
-- [DSH Tauri UI](https://github.com/dsh-tauri-desk/dsh-tauri-ui) — 为 Tauri 2 外壳提供自定义设置侧边栏
-- [DSH Tauri Worktree](https://github.com/dsh-tauri-desk/dsh-tauri-worktree) — 为每个会话创建隔离的 Git Worktree，并支持检出到本地分支或归档放弃
-- [DSH Tauri Panel](https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-panel) — 侧栏外壳、面板协议
-- [DSH Tauri Panel Extension](https://github.com/dsh-tauri-desk/dsh-tauri-plugins/tree/main/packages/dsh-tauri-panel-extension) — Skills/MCP 管理与导入技能仓库
-- 更多即将引入的插件...
 
 ## 快速开始
 
-从 [Releases](https://github.com/hairyf/deepseek-harness-desktop/releases) 下载对应平台安装包，安装后启动即可。
-
-**macOS（Homebrew）：** 也可通过 Homebrew 一键安装：
-
-```bash
-brew install dsh-tauri-desk/desktop/deepseek-harness
-```
+从 [Releases](https://github.com/railzen/deepseek-harness-win/releases) 下载对应平台安装包，安装后启动即可。
 
 首次运行会下载 Node 运行时与 Harness 内核（如已经安装 `dsh` ，则使用安装版本），随后直接进入 `http://127.0.0.1:3080` 的 Harness 界面；此后完全本地运行，无需联网。
 
@@ -107,14 +76,13 @@ brew install dsh-tauri-desk/desktop/deepseek-harness
 │   service/download  安装器 + 解压            │
 │   service/core      Harness 核心多版本管理   │
 │   service/profile   dsh 档案管理             │
-│   service/plugin    插件卸载 / 升级          │
 │   service/cli       dsh 命令 shim + PATH     │
 │   service/update    桌面端自更新             │
 │   service/workflow  dsh 进程生命周期         │
 │   task              dsh 健康检查             │
 └──────┬───────────────────────────┬───────────┘
        │                           │
-  runtime/ (Node.js v22.22.0)   dependencies/dsh/ (发行版)
+  runtime/ (Node.js v22.22.0)   dependencies/dsh/ (官方版本)
        └─────────────┬─────────────┘
                      ▼
    dsh --profile <档案> --host 127.0.0.1 --port 3080
@@ -123,7 +91,7 @@ brew install dsh-tauri-desk/desktop/deepseek-harness
         http://127.0.0.1:3080/  ← 内嵌界面
 ```
 
-Harness 发行版由 [deepseek-harness-pkg](https://github.com/dsh-tauri-desk/deepseek-harness-pkg) 构建发布。每次启动都会对比最新发行版，本地过期时提醒下载更新；GitHub 不可达时保留本地安装。通过 CLI 全局安装的本地核心会被优先使用。
+Harness 根据 [DeepSeek 官方 Release](https://github.com/deepseek-ai/deepseek-harness/releases) 的 tag 安装对应的 `@deepseek-ai/dsh` 官方版本。桌面端自更新只查询本项目 Release；仓库尚无 Release 时视为已是最新版本。
 
 ## 说明
 
@@ -136,7 +104,6 @@ Harness 发行版由 [deepseek-harness-pkg](https://github.com/dsh-tauri-desk/de
 ## 相关项目
 
 - [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) — 上游 `dsh` agent 平台
-- [deepseek-harness-pkg](https://github.com/dsh-tauri-desk/deepseek-harness-pkg) — 预打包 Harness 发行版（本应用下载源）
 - [n8n-desktop](https://github.com/tangtao646/n8n-desktop) — 参考实现
 
 ## License

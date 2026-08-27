@@ -3,7 +3,7 @@
 //! 核心来源：
 //! - `local`：用户通过 CLI（npm/pnpm 全局安装）自行安装的 dsh，安装目录与
 //!   配置（`$DSH_HOME`）都不归桌面端管理；
-//! - `app`：桌面端预打包管理的 deepseek-harness-pkg 多版本副本。激活版本固定
+//! - `app`：桌面端按官方 Release tag 管理的 Harness 多版本副本。激活版本固定
 //!   位于 `dependencies/dsh`（既有代码全部依赖该路径），通过「核心」面板下载的
 //!   历史版本存放在 `dependencies/dsh-<tag>` 槽位，切换时两个目录互换。
 //!

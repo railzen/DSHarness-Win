@@ -6,7 +6,7 @@ import { getIframeOrigin } from '@/utils/iframe'
 /**
  * 壳层导航桥（宿主侧）：ShellNavBar 左侧三个控件的消息通道。
  *
- * 协议（与 dsh-tauri 插件 / 桌面端 NAV_SHIM_JS 一致）：
+ * 协议（与桌面端 NAV_SHIM_JS 一致）：
  * - 发送（宿主 → iframe）：`{ source: 'dsh-desktop', type }`
  *   - `dsh://sidebar:toggle`  切换侧边栏
  *   - `dsh://page:prev` / `dsh://page:next`  后退 / 前进
@@ -16,7 +16,7 @@ import { getIframeOrigin } from '@/utils/iframe'
  *     历史边界（宿主据此禁用后退/前进按钮）
  *
  * 只在 iframe 直接发来的消息上生效（event.source 校验），与通知桥一致。
- * iframeRef 为空（安装/错误/预装引导页）时只返回默认状态，不发送任何消息。
+ * iframeRef 为空（安装/错误页）时只返回默认状态，不发送任何消息。
  */
 
 /** 左侧导航控制动作（宿主 → iframe 命令）。 */

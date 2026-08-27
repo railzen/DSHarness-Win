@@ -2,16 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { containsInotifyLimitError, formatLogLine, pickErrorLines } from '../src/utils/log'
 
 describe('formatLogLine', () => {
-  it('strips the official GitHub release download prefix', () => {
-    const url = 'https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/download/dsh-0.1.1-rc.1-32457794457/deepseek-harness-pkg-windows.zip'
-    expect(formatLogLine(`Download ${url}`)).toBe(
-      'Download dsh-0.1.1-rc.1-32457794457/deepseek-harness-pkg-windows.zip',
-    )
+  it('strips the official npm tarball prefix', () => {
+    const url = 'https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz'
+    expect(formatLogLine(`Download ${url}`)).toBe('Download dsh-0.1.1-rc.2.tgz')
   })
 
   it('strips the ghfast.top mirror wrapper prefix', () => {
-    const url = 'https://ghfast.top/https://github.com/dsh-tauri-desk/deepseek-harness-pkg/releases/download/dsh-0.1.x-x/deepseek-harness-pkg-linux.zip'
-    expect(formatLogLine(`Download ${url}`)).toContain('deepseek-harness-pkg-linux.zip')
+    const url = 'https://ghfast.top/https://github.com/railzen/deepseek-harness-win/releases/download/v1.0.0/deepseek-harness-win.exe'
+    expect(formatLogLine(`Download ${url}`)).toContain('deepseek-harness-win.exe')
     expect(formatLogLine(`Download ${url}`)).not.toContain('ghfast.top')
   })
 

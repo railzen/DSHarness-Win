@@ -3,7 +3,6 @@ dist
 src-tauri/target
 src-tauri/gen
 src-tauri/resources/node
-src-tauri/resources/preset-plugins/
 *.log
 .DS_Store
 .idea

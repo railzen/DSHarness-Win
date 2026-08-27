@@ -46,7 +46,7 @@ impl Installable for Dsh {
         "Harness 核心"
     }
     fn get_download_url(&self) -> Result<String, String> {
-        config::get_dsh_download_url()
+        Err("DSH_RELEASE_INSTALL_ONLY: Harness has no direct runtime asset".to_string())
     }
     fn get_install_path(&self, app: &AppHandle) -> PathBuf {
         config::get_dsh_install_path(app)
@@ -56,7 +56,7 @@ impl Installable for Dsh {
     }
 }
 
-// --- pnpm 实现（dsh 的 plugin 命令依赖） ---
+// --- pnpm 实现（用于按官方 release tag 安装 dsh） ---
 pub struct Pnpm;
 
 #[async_trait]
@@ -71,42 +71,7 @@ impl Installable for Pnpm {
         config::get_pnpm_install_path(app)
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
-        // "有则跳过"：用户 PATH 中已有 pnpm 时不再安装捆绑版
-        if crate::service::cli::find_user_pnpm(app).is_some() {
-            log::info!("Detected user-installed pnpm, skipping bundled pnpm");
-            return true;
-        }
+        // 核心安装固定使用捆绑版本，避免用户环境差异改变依赖布局。
         config::get_pnpm_binary_path(app).exists()
-    }
-}
-
-// --- Windows Git 实现（插件的 git 托管依赖需要） ---
-#[cfg(windows)]
-pub struct Git;
-
-#[cfg(windows)]
-#[async_trait]
-impl Installable for Git {
-    fn title(&self) -> &str {
-        "Git 环境"
-    }
-
-    fn get_download_url(&self) -> Result<String, String> {
-        config::get_mingit_download_url()
-    }
-
-    fn get_install_path(&self, app: &AppHandle) -> PathBuf {
-        config::get_mingit_install_path(app)
-    }
-
-    fn check_installed(&self, app: &AppHandle) -> bool {
-        if let Some(system_git) = config::find_system_git_binary() {
-            log::info!(
-                "Detected usable system Git ({}), skipping bundled MinGit",
-                system_git.display()
-            );
-            return true;
-        }
-        config::git_runtime_ready(app)
     }
 }

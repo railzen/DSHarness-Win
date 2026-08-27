@@ -1,6 +1,6 @@
 //! 依赖安装、自愈与 Harness 服务生命周期管理。
 //!
-//! 覆盖三块：依赖（Node.js / 打包 Harness / pnpm）的安装与「记录滞后」自愈、
+//! 覆盖三块：依赖（Node.js / 官方 Harness / pnpm）的安装与「记录滞后」自愈、
 //! Harness 服务进程的启停与状态查询，以及运行时三件套的就绪判断。
 
 use std::sync::OnceLock;
@@ -65,13 +65,8 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
     // 不一致时，说明上游 pkg 有更新/修复，需要自动重新下载。
     let node_ok = download::Nodejs.check_installed(&app_handle);
     let dsh_files_ok = download::Dsh.check_installed(&app_handle);
-    // pnpm 是 dsh plugin 子命令的运行时依赖（v0.3.0 起随环境安装）；老版本
-    // 升级后 `installed` 已为 true 会跳过环境安装，捆绑 pnpm 可能从未落盘，
-    // 需一并纳入"已就绪"判定，缺失时由 workflow::install 按任务补齐。
+    // pnpm 用于按官方 Release tag 安装精确版本的 Harness，必须使用捆绑版本。
     let pnpm_ok = download::Pnpm.check_installed(&app_handle);
-    // Windows 空白环境还必须有可执行的 Git，才能安装 github:/git+ssh: 插件。
-    // 非 Windows 返回 true，保持原有依赖集合不变。
-    let git_ok = config::git_runtime_ready(&app_handle);
 
     // 启动自愈捷径：记录显示未安装、但运行时文件已全部在盘。常见于桌面端自更新
     // 安装器强杀进程，或上次启动时核心文件短暂缺失被 workflow::start 复位
@@ -80,7 +75,7 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
     // 误判为真更新，而重下整目录在 Windows 上极易破坏 node_modules（历史 issue：
     // 重解压后启动报找不到 @deepseek-ai/dsh-client-ui-settings）。真更新一律由
     // 启动后的 check_dsh_update 提示用户手动安装，启动路径不该自行下载。
-    if node_ok && dsh_files_ok && pnpm_ok && git_ok {
+    if node_ok && dsh_files_ok && pnpm_ok {
         let setting = config::get_store_dat_setting(&app_handle);
         if !setting.installed {
             log::info!(
@@ -92,22 +87,6 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
             sync_cli_link(&app_handle);
             return Ok(false);
         }
-    }
-
-    // 老版本升级后 installed 仍为 true，但可能缺少新版新增的 Windows Git 依赖。
-    // 其余三项均就绪时直接走本地任务跳过 + Git 补装，不查询 Harness 最新版本，
-    // 避免一次依赖自愈意外触发核心更新。
-    if node_ok && dsh_files_ok && pnpm_ok && !git_ok {
-        log::info!("Git dependency missing, provisioning bundled MinGit without core update check");
-        workflow::status::set_status(workflow::status::Status::Installing);
-        workflow::status::emit_status(&app_handle);
-        if let Err(e) = workflow::install(&app_handle, None).await {
-            log::error!("Git dependency installation failed, resetting status: {e}");
-            reset_install_status(&app_handle);
-            return Err(e);
-        }
-        sync_cli_link(&app_handle);
-        return Ok(false);
     }
 
     let dsh_latest = download::fetch_latest_dsh_pkg_info().await;
@@ -150,20 +129,7 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
                     }
                     false
                 }
-                download::UpdateCheck::UpdateAvailable => {
-                    // 有新版但 GitHub API 限流拿不到可信源码摘要时，不自动整包重下
-                    // （无法校验完整性，Windows 上重解压还易损坏 node_modules）。
-                    // 保持本地安装，更新提示由启动后的 check_dsh_update 给出，稍后可重试。
-                    if latest.digest.is_none() {
-                        log::warn!(
-                            "New dsh release {} found but trusted digest unavailable (API rate-limited), keeping local install",
-                            latest.tag
-                        );
-                        false
-                    } else {
-                        true
-                    }
-                }
+                download::UpdateCheck::UpdateAvailable => true,
             }
         }
         // 核心文件缺失（首次安装或目录被清空）→ 需要安装
@@ -178,7 +144,7 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
         }
     };
 
-    if node_ok && !dsh_need_install && pnpm_ok && git_ok {
+    if node_ok && !dsh_need_install && pnpm_ok {
         log::info!("Dependencies already installed and up to date, skipping installation");
         let mut setting = config::get_store_dat_setting(&app_handle);
         if !setting.installed {
@@ -288,8 +254,7 @@ pub fn get_dsh_status() -> workflow::status::Status {
     workflow::status::get_status()
 }
 
-/// 运行时文件是否已全部在盘（Node / Dsh / pnpm；Windows 还要求 Git 可用，
-/// 纯本地检查、无网络）。
+/// 运行时文件是否已全部在盘（Node / Dsh / pnpm，纯本地检查、无网络）。
 ///
 /// 判定条件与 `install_dependencies` 的「启动自愈」捷径完全一致：桌面端自更新
 /// （MSI 强杀进程）后 store 可能被复位或损坏显示「未安装」，但运行时文件其实
@@ -300,7 +265,6 @@ pub fn runtime_ready(app_handle: AppHandle) -> bool {
     download::Nodejs.check_installed(&app_handle)
         && download::Dsh.check_installed(&app_handle)
         && download::Pnpm.check_installed(&app_handle)
-        && config::git_runtime_ready(&app_handle)
 }
 
 #[cfg(test)]

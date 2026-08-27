@@ -20,7 +20,7 @@ export function ConfigProfile() {
    *
    * 数据来自 `useDshProfiles`（`get_profiles` 查询 + `setting_updated` 事件刷新）：
    * 档案 = `$DSH_HOME/profiles/<id>` 目录，与官方 dsh CLI 的 profile 语义一致；
-   * 桌面端把「当前档案」持久化在 store（`active_profile`），服务启动与插件管理
+   * 桌面端把「当前档案」持久化在 store（`active_profile`），服务启动与配置隔离
    * 都以它为准。切换档案需要重启服务才生效（toast 内提供重启入口）。
    */
   const { profiles, loading, error, createProfile, activateProfile, removeProfile, busy } = useDshProfiles()

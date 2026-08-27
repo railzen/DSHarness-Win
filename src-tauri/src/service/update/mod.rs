@@ -8,9 +8,7 @@
 //!   永远是最新发布，不会因上传期间的旧结果而误判「已是最新」。
 //! - 通过 GitHub 的 **HTML/atom 页面**（releases.atom、expanded_assets）而非
 //!   api.github.com 查询，绕开未认证 API 60 次/小时/IP 的限流。
-//! - 只对**正式版**（纯数字版本）提示更新：rc/beta/alpha 与手动测试 release
-//!   （`test-*` tag）一律跳过（见 [`version`] 的 `is_stable`），不会把测试版
-//!   推给用户；装了 rc 的用户仍会按 semver 收到之后的正式版通知。
+//! - 接受仓库中合法 semver 的 Release，非法测试 tag 会跳过。
 //! - 安装包下载到 AppData/updates 目录；已存在则视为「已下载」，不再重复拉取。
 //! - 打开安装器（exe/msi/dmg 等）交给系统默认处理器（ShellExecute/LaunchServices）。
 //!
@@ -31,7 +29,7 @@ pub use about::{about, DesktopAboutInfo};
 pub use install::{check, download, open_installer, DesktopDownloadProgress, DesktopUpdateInfo};
 
 /// 仓库主页（同时用于构造 atom / expanded_assets / 下载地址）
-const REPO_URL: &str = "https://github.com/hairyf/deepseek-harness-desktop";
+const REPO_URL: &str = "https://github.com/railzen/deepseek-harness-win";
 /// 版权信息（与 tauri.conf.json bundle.copyright 保持一致）
 const COPYRIGHT: &str = "Copyright © 2026 Deepseek Harness Desktop contributors";
 /// About 对话框的 "Powered by" 文案

@@ -10,7 +10,6 @@ vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({
 const CLIPBOARD_CALL_SITES = [
   '../src/components/config-debug.tsx',
   '../src/layout/components/navbar.tsx',
-  '../src/layout/components/preinstall-setup.tsx',
 ]
 
 describe('clipboard integration', () => {

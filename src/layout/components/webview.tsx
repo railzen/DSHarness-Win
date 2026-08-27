@@ -4,13 +4,11 @@ import { useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { If } from 'react-if-lite'
 import { useStore } from 'valtio-define'
-import { PluginRecovery } from '@/components/plugin-recovery'
 import { useDesktopZoom } from '@/hooks/use-desktop-zoom'
 import { useIframeShim } from '@/hooks/use-iframe-shim'
 import { store } from '@/store'
 import { Loadable } from './loadable'
 import { Navbar } from './navbar'
-import { PreinstallSetup } from './preinstall-setup'
 import { Setup } from './setup'
 
 /**
@@ -24,12 +22,10 @@ export function Webview() {
   const {
     status,
     serviceHealthy,
-    internalLoading,
     iframeError,
     iframeKey,
     iframeSrc,
     serviceUrl,
-    recovery,
   } = useStore(store.harness)
 
   const iframeRef = useRef<HTMLIFrameElement>(null)
@@ -42,22 +38,7 @@ export function Webview() {
       <main className="relative flex min-h-0 flex-1 flex-col bg-canvas">
         <Navbar />
         <div className="min-h-0 flex-1">
-          {/* 能定位到问题插件时展示全屏恢复页（卸除此插件并继续检测）；否则普通错误页 */}
-          <If cond={recovery.required} else={<Setup />}>
-            <PluginRecovery fullScreen />
-          </If>
-        </div>
-      </main>
-    )
-  }
-
-  // 预装插件引导：独立于安装/加载界面，渲染推荐插件列表与安装控制台
-  if (status === 'preinstall') {
-    return (
-      <main className="relative flex min-h-0 w-full flex-col bg-canvas">
-        <Navbar />
-        <div className="min-h-0 flex-1">
-          <PreinstallSetup />
+          <Setup />
         </div>
       </main>
     )
@@ -82,7 +63,7 @@ export function Webview() {
       <div className="relative min-h-0 flex-1">
         <If
           cond={serviceHealthy}
-          else={<Loadable subtitle={internalLoading ? t('status.loading_internal') : t('status.loading')} />}
+          else={<Loadable subtitle={t('status.loading')} />}
         >
           <iframe
             key={iframeKey}
@@ -97,15 +78,17 @@ export function Webview() {
           />
         </If>
 
-        <If cond={serviceHealthy && iframeError}>
-          <div className="absolute inset-0 z-[1]">
-            <Loadable
-              icon={CircleExclamation}
-              title={t('ui.iframe_error')}
-              errorMsg={t('ui.ensure_running', { url: serviceUrl })}
-              onRetry={store.harness.refreshIframe}
-            />
-          </div>
+        <If cond={serviceHealthy}>
+          <If cond={iframeError}>
+            <div className="absolute inset-0 z-[1]">
+              <Loadable
+                icon={CircleExclamation}
+                title={t('ui.iframe_error')}
+                errorMsg={t('ui.ensure_running', { url: serviceUrl })}
+                onRetry={store.harness.refreshIframe}
+              />
+            </div>
+          </If>
         </If>
       </div>
     </main>

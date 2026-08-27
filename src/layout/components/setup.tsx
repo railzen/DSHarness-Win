@@ -1,6 +1,6 @@
 import type { IconComponent } from './loadable'
 import type { SetupStatus } from '@/store/modules/harness'
-import { ArrowDownToLine, CircleCheck, CircleExclamation, CircleInfo, Magnifier, Rocket } from '@gravity-ui/icons'
+import { ArrowDownToLine, CircleCheck, CircleExclamation, Magnifier, Rocket } from '@gravity-ui/icons'
 import { useTranslation } from 'react-i18next'
 import { useStore } from 'valtio-define'
 import { store } from '@/store'
@@ -11,7 +11,6 @@ const STATUS_ICONS: Record<SetupStatus, IconComponent> = {
   checking: Magnifier,
   installing: ArrowDownToLine,
   starting: Rocket,
-  preinstall: CircleInfo,
   ready: CircleCheck,
   error: CircleExclamation,
 }
@@ -28,7 +27,6 @@ export function Setup() {
     installer,
     errorMsg,
     errorLogs,
-    pluginConflictHint,
     inotifyLimitHint,
   } = useStore(store.harness)
   const error = status === 'error'
@@ -40,8 +38,8 @@ export function Setup() {
   const logs = installing
     ? installer.logs
     : (error && errorLogs.length > 0 ? errorLogs : undefined)
-  // 错误态的针对性提示：插件路由冲突 / Linux inotify 文件监视上限，二选一优先展示
-  const hint = error ? (pluginConflictHint || inotifyLimitHint) : undefined
+  // 错误态展示 Linux inotify 文件监视上限提示
+  const hint = error ? inotifyLimitHint : undefined
 
   return (
     <Loadable

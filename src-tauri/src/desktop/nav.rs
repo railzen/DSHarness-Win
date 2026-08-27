@@ -8,18 +8,16 @@
 //! （Windows 在 FrameCreated → ContentLoading 时 ExecuteScript，其余平台
 //! `initialization_script_for_all_frames`），因此 iframe 每次重新加载都会自动重建。
 //!
-//! 协议（与 dsh-tauri 插件完全一致）：
+//! 桌面端内部协议：
 //! - 接收 `dsh://sidebar:toggle` / `dsh://page:prev` / `dsh://page:next` 命令；
 //! - 回报 `dsh://sidebar:collapsed` / `dsh://page:firsted` / `dsh://page:lasted` 事件。
-//! 插件加载后设置 `window.__dsh_tauri_bridge__`，本脚本检测到即让位
-//! （命令与事件都停发，避免双重执行）；插件卸载后自动恢复接管。
 //!
 //! 页面模型：dsh 应用不产生浏览器历史，「页面」= 侧边栏当前选中的会话
 //! （`[role="treeitem"][aria-selected="true"]`）。观察选中会话变化维护会话
 //! 访问栈（纯内存）：用户点击会话 → 截断前进记录后追加新页并上报；后退/前进 →
 //! 点击栈内对应会话行（行元素失效时按标题匹配兜底）。
 
-/// iframe 内注入的导航桥脚本（dsh-tauri 插件缺席时的兜底实现）。
+/// iframe 内注入的桌面端导航桥脚本。
 pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
   if (window.__dsh_nav_bridge__) return;
   window.__dsh_nav_bridge__ = true;
@@ -31,13 +29,7 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
   // 会话行菜单按钮的 aria-label 模板（zh/en），用于提取标题与按标题找行。
   var SESSION_LABEL_PATTERNS = [/^会话“(.+)”的操作$/, /^Session actions for (.+)$/];
 
-  // dsh-tauri 插件已接管时让位：命令与事件都停发，避免双重执行
-  function bridgeActive() {
-    return !!window.__dsh_tauri_bridge__;
-  }
-
   function post(message) {
-    if (bridgeActive()) return;
     try {
       window.parent.postMessage(Object.assign({ source: SRC_BRIDGE }, message), '*');
     } catch (_) {}
@@ -124,7 +116,6 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
   }
 
   function reportPage() {
-    if (bridgeActive()) return;
     post({ type: 'dsh://page:firsted', firsted: position <= 0 });
     post({ type: 'dsh://page:lasted', lasted: position >= pages.length - 1 });
   }
@@ -150,7 +141,6 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
   }
 
   function onDomChange() {
-    if (bridgeActive()) return;
     var sel = currentSelected();
     var key = rowTitle(sel);
     if (key === lastKey) return;
@@ -171,7 +161,6 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
 
   // ── 侧边栏折叠观察 + 初始化 ──────────────────────────────────
   function reportSidebar() {
-    if (bridgeActive()) return;
     post({ type: 'dsh://sidebar:collapsed', collapsed: isCollapsed() });
   }
 
@@ -213,7 +202,6 @@ pub(crate) const NAV_SHIM_JS: &str = r#"(function () {
 
   // ── 宿主命令接收 ─────────────────────────────────────────────
   window.addEventListener('message', function (event) {
-    if (bridgeActive()) return;
     var data = event.data;
     if (!data || typeof data !== 'object' || data.source !== 'dsh-desktop') return;
     switch (data.type) {

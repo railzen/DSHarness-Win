@@ -21,7 +21,7 @@ import { PanelState } from './panel-state'
  *
  * - 列表来自 `useDshCores`（`get_cores` 查询 + `setting_updated` 事件刷新）：
  *   `local` = 用户通过 CLI 全局安装的本地核心（存在时优先使用，需求 3）；
- *   `app-<tag>` = deepseek-harness-pkg 各发布版本（GitHub tags 拉取失败时
+ *   `app-<tag>` = DeepSeek 官方 Release 的各发布版本（GitHub tags 拉取失败时
  *   降级为磁盘扫描，仅显示已下载版本）。
  * - 切换核心：持久化后**自动重启**服务（需求 5），重启走 harness store 的
  *   restart 流程（停止 → 重新启动 → 健康检查）。

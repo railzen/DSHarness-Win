@@ -81,7 +81,7 @@ pub fn active_source(app_handle: &AppHandle) -> CoreSource {
 
 /// 当前活动核心的 dsh 入口（bin.js 绝对路径）。
 ///
-/// 供服务启动（workflow::launch）与插件操作（plugin::install 等）统一取用，
+/// 供服务启动（workflow::launch）与核心安装流程统一取用，
 /// 本地核心解析在调用瞬间失效时回退预打包入口。
 pub fn active_dsh_binary(app_handle: &AppHandle) -> PathBuf {
     match active_source(app_handle) {

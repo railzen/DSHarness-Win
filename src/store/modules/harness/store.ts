@@ -3,11 +3,6 @@ import type { UnlistenFn } from '@tauri-apps/api/event'
 import type {
   InstallerState,
   InstallProgress,
-  InternalPluginsPhasePayload,
-  PluginRecoveryInfo,
-  PreinstallLogPayload,
-  PreinstallPlugin,
-  RecoveryState,
   SetupStatus,
   SidebarBusyAction,
 } from './types'
@@ -30,9 +25,6 @@ const LOG_TAIL_MAX_BYTES = 16 * 1024
 /** 启动失败错误：附带从 dsh 服务日志中读取的真实错误行与可选的冲突提示 */
 interface StartupError extends Error {
   logs?: string[]
-  /** 完整清洗后的日志尾（供插件异常定位使用，非仅错误行） */
-  logLines?: string[]
-  pluginConflictHint?: string
   /** Linux inotify 文件监视上限（ENOSPC）导致服务启动即崩溃时的针对性提示 */
   inotifyLimitHint?: string
   /** 初始就绪窗口已耗尽，但后端进程仍由桌面端持有，可继续后台探测 */
@@ -44,13 +36,6 @@ const initialInstaller: InstallerState = {
   detail: '',
   percentage: 0,
   logs: [],
-}
-
-const initialRecovery: RecoveryState = {
-  required: false,
-  info: null,
-  attempts: 0,
-  busy: false,
 }
 
 /** 启动流程令牌：boot 并发/重复调用时只采纳最后一次的结果 */
@@ -129,12 +114,7 @@ async function attachStartupDiagnostics(err: unknown): Promise<StartupError> {
   const startupError: StartupError = err instanceof Error ? err : new Error(String(err))
   if (!startupError.logs) {
     const lines = await readServiceLogTail()
-    startupError.logLines = lines
     startupError.logs = pickErrorLines(lines)
-    // 识别插件路由冲突（如 `duplicate prefix route "/sidebar/api"`），给出可操作的提示
-    if (lines.join('\n').includes('duplicate prefix route')) {
-      startupError.pluginConflictHint = i18next.t('errors.plugin_route_conflict')
-    }
     // 识别 Linux inotify 文件监视上限（ENOSPC）：harness 服务启动即崩溃且用户无法直接解决，
     // 需要系统级调高 fs.inotify.max_user_watches（见 errors.inotify_limit 文案）
     if (containsInotifyLimitError(lines)) {
@@ -159,27 +139,8 @@ export const harness = defineStore({
     errorMsg: '',
     /** 启动失败时从 dsh 服务日志中读取的真实错误行（Loadable 错误态日志面板） */
     errorLogs: [] as string[],
-    /** 识别到插件路由冲突时的针对性提示（Loadable children 展示） */
-    pluginConflictHint: '',
     /** 识别到 Linux inotify 文件监视上限（ENOSPC）时的针对性提示（Loadable children 展示） */
     inotifyLimitHint: '',
-    /** 插件异常修复界面状态（启动崩溃/运行期异常 → 弹出「卸除此插件并继续检测」） */
-    recovery: initialRecovery,
-    /** 用户已「暂不处理」的插件 id（避免同一运行期异常反复弹窗） */
-    dismissedRecoveryIds: [] as string[],
-    /** 预装插件引导状态：列表/安装进度/日志/错误 */
-    preinstall: {
-      plugins: [] as PreinstallPlugin[],
-      loading: false,
-      installing: false,
-      /** 用户触发了“取消”但仍需等后端结束进程树 */
-      cancelling: false,
-      logs: [] as string[],
-      /** 安装失败错误（区别于下面列表加载失败） */
-      error: '',
-      /** 拉取预装插件列表失败（区别于空列表；UI 据此展示错误态 + 重试） */
-      loadError: '',
-    },
     serviceUrl: 'http://127.0.0.1:3080',
     /** 带时间戳的 iframe 地址（boot 时生成一次，避免缓存） */
     iframeSrc: '',
@@ -188,8 +149,6 @@ export const harness = defineStore({
     iframeKey: 0,
     serviceHealthy: false,
     serviceRunning: false,
-    /** 内置插件核对/安装阶段：加载屏在「Loading internal plugins…」与「Loading plugins…」间切换 */
-    internalLoading: false,
     busyAction: null as SidebarBusyAction,
   }),
   actions: {
@@ -198,40 +157,7 @@ export const harness = defineStore({
       if (bootStarted)
         return
       bootStarted = true
-      void this.listenPluginRecovery()
-      void this.listenInternalPhase()
       void this.boot()
-    },
-
-    /**
-     * 订阅后端「插件异常」推送：`report_plugin_error`（运行期异常）会推送
-     * `plugin-recovery-required`，据此弹出「卸除此插件并继续检测」修复界面。
-     */
-    async listenPluginRecovery() {
-      try {
-        await listen<PluginRecoveryInfo>('plugin-recovery-required', (event) => {
-          this.setRuntimeRecovery(event.payload)
-        })
-      }
-      catch (err) {
-        console.error('[Harness] failed to listen plugin-recovery-required:', err)
-      }
-    },
-
-    /**
-     * 订阅后端「内置插件核对阶段」推送：`internal-plugins-phase` 事件
-     * （loading / done），加载屏据此在「Loading internal plugins…」与
-     * 「Loading plugins…」之间切换。事件在服务启动前发出，健康轮询期间到达。
-     */
-    async listenInternalPhase() {
-      try {
-        await listen<InternalPluginsPhasePayload>('internal-plugins-phase', (event) => {
-          this.internalLoading = event.payload.phase === 'loading'
-        })
-      }
-      catch (err) {
-        console.error('[Harness] failed to listen internal-plugins-phase:', err)
-      }
     },
 
     /** 刷新 iframe：清除加载态并延迟重新挂载 */
@@ -286,20 +212,14 @@ export const harness = defineStore({
       this.status = 'ready'
       this.errorMsg = ''
       this.errorLogs = []
-      this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
-      this.preinstall.error = ''
-      // 服务（重）启动成功：清空插件异常修复态（若曾进入），并重置已「暂不处理」的插件
-      this.recovery = { required: false, info: null, attempts: 0, busy: false }
-      this.dismissedRecoveryIds = []
       // 服务（重）启动成功后，dsh 版本/端口/CLI 链接状态等运行时信息可能已变化
       // （典型：Harness 更新后旧版本缓存仍在，调试侧边栏需刷新页面才显示新版本）。
       // 使侧边栏相关查询缓存失效，重新打开/已挂载时自动拉取最新值。
       void queryClient.invalidateQueries({ queryKey: ['info'] })
       void queryClient.invalidateQueries({ queryKey: ['config'] })
       void queryClient.invalidateQueries({ queryKey: ['cli_status'] })
-      // 档案/核心切换后重启：当前档案的插件列表、核心来源状态一并刷新
-      void queryClient.invalidateQueries({ queryKey: ['plugins'] })
+      // 档案/核心切换后重启，刷新对应状态。
       void queryClient.invalidateQueries({ queryKey: ['profiles'] })
       void queryClient.invalidateQueries({ queryKey: ['cores'] })
       return true
@@ -307,7 +227,7 @@ export const harness = defineStore({
 
     /**
      * 初始就绪窗口超时后继续探测同一已持有进程。错误界面仍会及时出现，但只要后端
-     * 稍后完成插件加载，就自动恢复并挂载 iframe；新一轮 boot 会用 token 终止旧探测。
+     * 稍后完成启动，就自动恢复并挂载 iframe；新一轮 boot 会用 token 终止旧探测。
      */
     async recoverReadiness(token: number) {
       const result = await pollReadiness({
@@ -338,10 +258,7 @@ export const harness = defineStore({
       this.installer = initialInstaller
       this.errorMsg = ''
       this.errorLogs = []
-      this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
-      this.recovery = initialRecovery
-      this.dismissedRecoveryIds = []
       this.serviceHealthy = false
       this.iframeLoaded = false
       this.iframeError = false
@@ -385,14 +302,10 @@ export const harness = defineStore({
       this.serviceHealthy = false
       this.iframeLoaded = false
       this.iframeError = false
-      // 重新启动/进入启动流程时先退出上一轮的错误与修复态（重启可能由插件修复、
-      // 配置切换触发），避免旧的「启动失败 / Preview」等信息在启动期间闪现。
-      // 注意：保留 attempts 计数，连续失败仍能命中「频繁失败」提示。
+      // 重新启动/进入启动流程时先退出上一轮的错误态。
       this.errorMsg = ''
       this.errorLogs = []
-      this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
-      this.recovery = { required: false, info: null, attempts: this.recovery.attempts, busy: false }
       this.status = 'ready'
       let unlistenInstall: UnlistenFn | null = null
 
@@ -426,29 +339,6 @@ export const harness = defineStore({
           await invoke('install_dependencies')
         }
 
-        // 内置插件自愈（独立于预装引导）：无论是否进入预装页、点不点「继续/跳过」，
-        // 都在启动阶段先把内置插件核对/安装到位——加载屏先显示「Loading internal
-        // plugins…」（此处乐观置位消除文案闪跳，后端 internal-plugins-phase 事件为
-        // 权威信号），确保「下一步先加载内部插件」。后端幂等且不阻断：失败仅告警。
-        this.internalLoading = true
-        try {
-          await invoke('ensure_internal_plugins')
-        }
-        catch (err) {
-          console.error('[Harness] ensure internal plugins failed (best-effort):', err)
-        }
-        this.internalLoading = false
-
-        // 预装插件引导：首次安装、老版本升级（无指纹基线）或 preset-plugins.json
-        // 内容变更（社区新增推荐插件）时重新进入预设流程，装完/跳过后才拉起服务。
-        // preset-plugins.json 随安装包发布、每次安装被强制覆盖，旧文件不可比对，
-        // 由 Rust 侧记录内容指纹到 app-data（.store.dat），启动时比对是否有变更。
-        if (await invoke<boolean>('get_preinstall_pending')) {
-          this.status = 'preinstall'
-          await this.loadPreinstallPlugins()
-          return
-        }
-
         await this.launchAndWait(token)
 
         if (token !== bootToken)
@@ -463,13 +353,10 @@ export const harness = defineStore({
           return
         console.error('[Harness] startup failed:', err)
         const startupError = await attachStartupDiagnostics(err)
-        // 尝试从日志定位问题插件：能定位则弹出修复界面（全屏恢复页）
-        await this.reviewStartupRecovery(startupError.logLines ?? startupError.logs ?? [])
         const keepServiceRunning = startupError.readinessTimedOut === true
         this.fail(
           String(startupError),
           startupError.logs,
-          startupError.pluginConflictHint,
           startupError.inotifyLimitHint,
           keepServiceRunning,
         )
@@ -489,81 +376,12 @@ export const harness = defineStore({
     },
 
     /** 进入错误态（供本模块与 updater 模块共用） */
-    fail(message: string, logs?: string[], pluginConflictHint?: string, inotifyLimitHint?: string, keepServiceRunning = false) {
+    fail(message: string, logs?: string[], inotifyLimitHint?: string, keepServiceRunning = false) {
       this.errorMsg = message
       this.errorLogs = logs ?? []
-      this.pluginConflictHint = pluginConflictHint ?? ''
       this.inotifyLimitHint = inotifyLimitHint ?? ''
       this.status = 'error'
       this.serviceRunning = keepServiceRunning
-    },
-
-    /**
-     * 启动失败时尝试定位问题插件并弹出修复界面。
-     * 能定位到具体插件 → 设置 `recovery`；定位不到则保持普通错误态（无插件可卸载）。
-     */
-    async reviewStartupRecovery(logs: string[]) {
-      if (this.recovery.required || logs.length === 0)
-        return
-      try {
-        const info = await invoke<PluginRecoveryInfo>('detect_plugin_recovery', { logs })
-        if (info.plugins.length > 0) {
-          this.recovery = {
-            required: true,
-            info,
-            attempts: this.recovery.attempts + 1,
-            busy: false,
-          }
-        }
-      }
-      catch (err) {
-        console.error('[Harness] detect_plugin_recovery failed:', err)
-      }
-    },
-
-    /** 运行期插件异常：弹出修复对话框（应用仍在运行）。已「暂不处理」的同插件不再重复弹。 */
-    setRuntimeRecovery(info: PluginRecoveryInfo) {
-      if (info.plugins.length === 0)
-        return
-      if (info.plugins.some(id => this.dismissedRecoveryIds.includes(id)))
-        return
-      this.recovery = {
-        required: true,
-        info,
-        attempts: this.recovery.attempts + 1,
-        busy: false,
-      }
-    },
-
-    /** 「卸除此插件并继续检测」：离线卸载定位到的插件 → 重启并重新检测；仍有问题会再次触发修复界面。 */
-    async recoverAndRedetect(ids: readonly string[]) {
-      if (this.recovery.busy || ids.length === 0)
-        return
-      this.recovery = { ...this.recovery, busy: true }
-      try {
-        for (const id of ids) {
-          await invoke('recover_plugin', { id })
-        }
-        // 卸载成功：清空恢复态回到启动/就绪；若仍失败，boot 的 catch 会再次定位并弹出。
-        // 保留 attempts：连续失败会累加，达到上限后界面提示「查看日志 / 手动卸载」。
-        this.dismissedRecoveryIds = this.dismissedRecoveryIds.filter(x => !ids.includes(x))
-        this.recovery = { required: false, info: null, attempts: this.recovery.attempts, busy: false }
-        await this.restart()
-      }
-      catch (err) {
-        console.error('[Harness] recover_plugin failed:', err)
-        this.recovery = { ...this.recovery, busy: false, attempts: this.recovery.attempts + 1 }
-      }
-    },
-
-    /** 「暂不处理」：关闭修复界面并记住这些插件（运行期场景不阻断使用）。 */
-    dismissRecovery() {
-      if (this.recovery.info) {
-        this.dismissedRecoveryIds = [
-          ...new Set([...this.dismissedRecoveryIds, ...this.recovery.info.plugins]),
-        ]
-      }
-      this.recovery = { required: false, info: null, attempts: 0, busy: false }
     },
 
     /** 重启服务：先强杀再拉起，最终回到就绪/错误态 */
@@ -571,9 +389,6 @@ export const harness = defineStore({
       if (this.busyAction)
         return
       this.busyAction = 'restart'
-      // 手动重启（含修复界面上的「重启 Harness」）：先退出恢复态，
-      // 若重启仍失败，boot 的 catch 会重新定位问题插件并再次弹出。
-      this.recovery = { ...this.recovery, required: false, busy: false }
       try {
         emitter.emit('config:dialog:hidden')
         await invoke('shutdown_harness')
@@ -611,10 +426,7 @@ export const harness = defineStore({
       this.status = 'error'
       this.errorMsg = i18next.t('ui.stopped')
       this.errorLogs = []
-      this.pluginConflictHint = ''
       this.inotifyLimitHint = ''
-      this.recovery = initialRecovery
-      this.dismissedRecoveryIds = []
     },
 
     /** 服务未运行时点击"重试"：重新拉起服务并等待健康检查 */
@@ -646,129 +458,6 @@ export const harness = defineStore({
       }
     },
 
-    /** 拉取预装插件列表（含已安装检测），供首次启动引导界面渲染 */
-    async loadPreinstallPlugins(): Promise<PreinstallPlugin[]> {
-      if (this.preinstall.loading)
-        return this.preinstall.plugins
-      this.preinstall.loading = true
-      try {
-        this.preinstall.plugins = await invoke<PreinstallPlugin[]>('get_preinstall_plugins')
-        // 成功加载后清除历史加载错误，避免残留错误态遮蔽新列表
-        this.preinstall.loadError = ''
-      }
-      catch (err) {
-        console.error('[Harness] failed to load preinstall plugins:', err)
-        // 记录错误而非伪装空列表：UI 据此展示错误态与重试按钮
-        this.preinstall.loadError = String(err)
-      }
-      finally {
-        this.preinstall.loading = false
-      }
-      return this.preinstall.plugins
-    },
-
-    /** 预装安装日志流：dsh plugin 进程输出逐行追加 */
-    async listenPreinstallLog(): Promise<UnlistenFn> {
-      return listen<PreinstallLogPayload>('preinstall-log', (e) => {
-        this.preinstall.logs = [...this.preinstall.logs, e.payload.line].slice(-200)
-      })
-    },
-
-    /** 确认安装选中的预装插件：流式日志，完成后继续启动服务 */
-    async confirmPreinstall(ids: string[]) {
-      if (this.preinstall.installing || ids.length === 0)
-        return
-      this.preinstall.installing = true
-      this.preinstall.error = ''
-      this.preinstall.logs = []
-      let unlisten: UnlistenFn | null = null
-      try {
-        unlisten = await this.listenPreinstallLog()
-        await invoke('install_preinstall_plugins', { ids })
-        // 后端装完已把服务停掉，这里在日志面板讲清接下来的重启（issue #48），
-        // 避免用户把"插件安装后的自动重启"误认为崩溃/故障。
-        this.preinstall.logs = [...this.preinstall.logs, i18next.t('preinstall.restarting_hint')].slice(-200)
-        await this.continueAfterPreinstall()
-      }
-      catch (err) {
-        console.error('[Harness] preinstall failed:', err)
-        const error = String(err)
-        this.preinstall.error = error.startsWith('NETWORK_ERROR:')
-          ? i18next.t('preinstall.network_error')
-          : error
-        if (err instanceof Error && (err as StartupError).readinessTimedOut) {
-          void this.recoverReadiness(bootToken)
-        }
-      }
-      finally {
-        unlisten?.()
-        this.preinstall.installing = false
-        this.preinstall.cancelling = false
-      }
-    },
-
-    /**
-     * 取消正在进行的预装插件安装：网络抖动/拉包限流（429）时可能长时间卡在
-     * pnpm 重试；调用后端强杀插件安装进程树，回到可重试的选择态。
-     */
-    async cancelPreinstall() {
-      if (!this.preinstall.installing || this.preinstall.cancelling)
-        return
-      // 后端结束进程树导致 `install_preinstall_plugins` 提前返回并进入 catch，
-      // 通过 installing=false 让其回到列表态而不是报错态。
-      this.preinstall.cancelling = true
-      // 一次性监听：先挂事件（拿到注销函数再 invoke），finally 里注销，
-      // 避免每次取消都永久注册一个 `preinstall-cancelled` 监听（泄漏）。
-      let unlisten: (() => void) | undefined
-      try {
-        unlisten = await listen<unknown>('preinstall-cancelled', () => {
-          this.preinstall.installing = false
-          this.preinstall.cancelling = false
-        })
-        await invoke('cancel_preinstall_plugins')
-      }
-      catch (err) {
-        console.error('[Harness] cancel preinstall failed:', err)
-        this.preinstall.cancelling = false
-      }
-      finally {
-        unlisten?.()
-      }
-    },
-
-    /** 跳过预装插件引导：记录状态后继续启动服务 */
-    async skipPreinstall() {
-      if (this.preinstall.installing)
-        return
-      try {
-        await invoke('skip_preinstall_plugins')
-        await this.continueAfterPreinstall()
-      }
-      catch (err) {
-        console.error('[Harness] skip preinstall failed:', err)
-        this.preinstall.error = String(err)
-      }
-    },
-
-    /** 预装引导结束后的收尾：拉起服务等待就绪，并静默检查更新 */
-    async continueAfterPreinstall() {
-      await this.launchAndWait()
-      void harnessUpdater.checkForUpdate()
-    },
-
-    /**
-     * 从侧边栏重新打开预装插件引导：可重新选择/安装推荐插件。
-     * 关闭引导（确定/跳过）后回到正常启动流程，服务若在运行则保持原状态。
-     */
-    async openPreinstall() {
-      if (this.preinstall.installing)
-        return
-      emitter.emit('config:dialog:hidden')
-      this.preinstall.error = ''
-      this.preinstall.logs = []
-      this.status = 'preinstall'
-      await this.loadPreinstallPlugins()
-    },
   },
 })
 
