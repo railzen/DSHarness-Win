@@ -287,6 +287,52 @@ pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> 
     Ok(version)
 }
 
+/// 将指定官方版本安装到用户的全局 npm 环境，供桌面端直接调用 PATH 中的 dsh。
+pub async fn install_global_core(app_handle: &AppHandle, version: &str) -> Result<String, String> {
+    let package = format!("@deepseek-ai/dsh@={version}");
+    let program = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let args = vec!["install".to_string(), "-g".to_string(), package];
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(&args);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.output()
+    })
+    .await
+    .map_err(|e| format!("CORE_INSTALL_JOIN: {e}"))?
+    .map_err(|e| format!("CORE_INSTALL_SPAWN: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("CORE_INSTALL_FAILED: {stderr}"));
+    }
+    let installed = local_core(app_handle)
+        .ok_or_else(|| "CORE_INSTALL_NOT_FOUND: global dsh was installed but cannot be located".to_string())?;
+    Ok(installed.version)
+}
+
+/// 卸载用户全局安装的 DSH 核心。
+pub async fn uninstall_global_core(_app_handle: &AppHandle) -> Result<(), String> {
+    let program = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(program);
+        cmd.args(["uninstall", "-g", "@deepseek-ai/dsh"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x0800_0000);
+        }
+        cmd.output()
+    }).await.map_err(|e| format!("CORE_UNINSTALL_JOIN: {e}"))?
+      .map_err(|e| format!("CORE_UNINSTALL_SPAWN: {e}"))?;
+    if output.status.success() { Ok(()) } else {
+        Err(format!("CORE_UNINSTALL_FAILED: {}", String::from_utf8_lossy(&output.stderr)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

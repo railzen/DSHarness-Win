@@ -38,6 +38,7 @@ export interface UseDshCoresResult {
   removeCore: (id: string) => Promise<void>
   /** 通过用户包管理器 CLI 更新本地核心，返回更新后的版本号 */
   updateLocalCore: () => Promise<string>
+  uninstallGlobalCore: () => Promise<void>
   /** 操作进行中标记 */
   busy: boolean
 }
@@ -96,6 +97,10 @@ export function useDshCores(): UseDshCoresResult {
     mutationFn: () => invoke<string>('update_local_core'),
     onSuccess: invalidate,
   })
+  const uninstall = useMutation({
+    mutationFn: () => invoke<void>('uninstall_global_core'),
+    onSuccess: invalidate,
+  })
 
   return {
     cores: data ?? [],
@@ -120,6 +125,10 @@ export function useDshCores(): UseDshCoresResult {
       await refetch()
       return version
     },
-    busy: activate.isPending || download.isPending || remove.isPending || update.isPending,
+    uninstallGlobalCore: async () => {
+      await uninstall.mutateAsync()
+      await refetch()
+    },
+    busy: activate.isPending || download.isPending || remove.isPending || update.isPending || uninstall.isPending,
   }
 }

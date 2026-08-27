@@ -60,6 +60,13 @@ export function ConfigDebug() {
   })
   const port = portInput ?? config?.port ?? 3080
 
+  function restartOrStart() {
+    if (serviceRunning)
+      void store.harness.restart()
+    else
+      void store.harness.start()
+  }
+
   const { data: cliStatus, refetch: refreshCliStatus } = useQuery({
     queryKey: ['cli_status'],
     queryFn: () => invoke<CliLinkStatus>('get_cli_link_status'),
@@ -218,28 +225,26 @@ export function ConfigDebug() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <If cond={serviceRunning}>
-          <Button
-            size="sm"
-            variant="tertiary"
-            className="flex-1 rounded-md"
-            onPress={store.harness.restart}
-            isDisabled={busyAction !== null}
-          >
-            <If cond={busyAction === 'restart'} then={<Spinner size="sm" color="current" />} else={<ArrowRotateRight className="size-3.5" />} />
-            {t('app.restart')}
-          </Button>
-          <Button
-            size="sm"
-            variant="danger"
-            className="flex-1 rounded-md"
-            onPress={store.harness.shutdown}
-            isDisabled={busyAction !== null}
-          >
-            <If cond={busyAction === 'shutdown'} then={<Spinner size="sm" color="current" />} else={<Power className="size-3.5" />} />
-            {t('app.shutdown')}
-          </Button>
-        </If>
+        <Button
+          size="sm"
+          variant="tertiary"
+          className="flex-1 rounded-md"
+          onPress={restartOrStart}
+          isDisabled={busyAction !== null}
+        >
+          <If cond={busyAction === 'restart' || busyAction === 'start'} then={<Spinner size="sm" color="current" />} else={<If cond={serviceRunning} then={<ArrowRotateRight className="size-3.5" />} else={<Power className="size-3.5" />} />} />
+          <If cond={serviceRunning} then={t('app.restart')} else={t('app.start')} />
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          className="flex-1 rounded-md"
+          onPress={store.harness.shutdown}
+          isDisabled={!serviceRunning || busyAction !== null}
+        >
+          <If cond={busyAction === 'shutdown'} then={<Spinner size="sm" color="current" />} else={<Power className="size-3.5" />} />
+          {t('app.shutdown')}
+        </Button>
       </div>
       <div className="border-t border-line/30" />
       <div>

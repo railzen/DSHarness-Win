@@ -841,7 +841,8 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
             win_spawn::spawn_with_hidden_console_owned(
                 &node_binary_path,
                 &args,
-                Some(&config::get_dsh_install_path(&app_handle)),
+                // 全局 DSH 不一定存在应用私有 dependencies/dsh，工作目录使用已创建的 DSH_HOME。
+                Some(&dsh_home),
                 &envs,
             )
             .map(|(stdout, stderr, pid, handle)| {
@@ -893,7 +894,8 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
                 cmd.arg("--no-open");
             }
             cmd.envs(&envs)
-                .current_dir(config::get_dsh_install_path(&app_handle))
+                // 全局 DSH 不一定存在应用私有 dependencies/dsh，工作目录使用已创建的 DSH_HOME。
+                .current_dir(&dsh_home)
                 // 核心修正：提供一个空的 stdin 防止 setRawMode 报错
                 .stdin(Stdio::null())
                 // 使用管道捕获输出，以便在子线程中读取
@@ -1082,12 +1084,9 @@ pub async fn install(
                 "extract",
                 &format!("{} {}", config::i18n::t("install.extracting"), task.title()),
             );
-            download::install_official_dsh(
-                app_handle,
-                &info.tag,
-                task.get_install_path(app_handle),
-            )
-            .await?;
+            let version = download::parse_version_from_tag(&info.tag)
+                .ok_or_else(|| "DSH_TAG_INVALID: unsupported official tag".to_string())?;
+            crate::service::core::install_global_core(app_handle, &version).await?;
             tracker.end_phase();
             dsh_updated = true;
             config::set_dsh_pkg_commit(app_handle, info.commit.clone());

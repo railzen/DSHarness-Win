@@ -558,6 +558,7 @@ pub async fn ensure_extract<'a, R: Runtime>(
 const DSH_PKG_GITHUB_API: &str = "https://api.github.com/repos/deepseek-ai/deepseek-harness";
 /// DeepSeek Harness 官方仓库页面地址。
 const DSH_PKG_REPO: &str = "https://github.com/deepseek-ai/deepseek-harness";
+const DSH_NPM_METADATA: &str = "https://registry.npmjs.org/@deepseek-ai%2fdsh";
 
 /// 最新 Harness 发行版信息（版本 tag + 对应 commit hash）
 #[derive(Debug, Clone, serde::Serialize)]
@@ -674,7 +675,21 @@ async fn fetch_latest_dsh_tag_from_atom() -> Result<String, String> {
 }
 
 /// 查询官方 GitHub Release，并把 release tag 映射到完全相同版本的官方 npm 包。
+async fn npm_metadata() -> Result<serde_json::Value, String> {
+    let client = github_client()?;
+    client.get(DSH_NPM_METADATA).send().await
+        .map_err(|e| format!("NPM_METADATA: {e}"))?.error_for_status()
+        .map_err(|e| format!("NPM_METADATA: {e}"))?.json().await
+        .map_err(|e| format!("NPM_METADATA_PARSE: {e}"))
+}
+
+fn npm_version_tag(version: &str) -> String { format!("dsh-v{version}") }
+
 pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
+    let metadata = npm_metadata().await?;
+    let version = metadata.get("dist-tags").and_then(|v| v.get("latest"))
+        .and_then(|v| v.as_str()).ok_or_else(|| "DSH_NPM_LATEST_NOT_FOUND: missing latest tag".to_string())?;
+    return Ok(LatestDshPkg { tag: npm_version_tag(version), commit: version.to_string() });
     let client = github_client()?;
     let api_release = match fetch_releases_latest(&client).await {
         Ok(release) => Some(release),
@@ -730,6 +745,13 @@ pub async fn fetch_latest_dsh_pkg_info() -> Result<LatestDshPkg, String> {
 
 /// 验证指定 tag 是官方 Release，并返回对应的官方 npm 包地址。
 pub async fn fetch_dsh_pkg_asset(tag: &str) -> Result<LatestDshPkg, String> {
+    let version = parse_version_from_tag(tag)
+        .ok_or_else(|| format!("DSH_TAG_INVALID: unsupported official tag {tag}"))?;
+    let metadata = npm_metadata().await?;
+    if metadata.get("versions").and_then(|v| v.get(&version)).is_none() {
+        return Err(format!("DSH_VERSION_NOT_FOUND: {version}"));
+    }
+    return Ok(LatestDshPkg { tag: npm_version_tag(&version), commit: version });
     let client = github_client()?;
     parse_version_from_tag(tag)
         .ok_or_else(|| format!("DSH_TAG_INVALID: unsupported official tag {tag}"))?;
@@ -865,6 +887,12 @@ pub fn resolve_update(
 /// 仅在更新判定需要反查“无 tag 的老记录”时调用，失败时由调用方回退到
 /// “以实际文件为准”的保守分支。
 pub async fn fetch_dsh_pkg_tags() -> Result<Vec<(String, String)>, String> {
+    let metadata = npm_metadata().await?;
+    let mut versions: Vec<String> = metadata.get("versions").and_then(|v| v.as_object())
+        .map(|map| map.keys().filter(|v| semver::Version::parse(v).is_ok()).cloned().collect())
+        .unwrap_or_default();
+    versions.sort_by(|a, b| semver::Version::parse(b).unwrap().cmp(&semver::Version::parse(a).unwrap()));
+    return Ok(versions.into_iter().map(|v| (npm_version_tag(&v), v)).collect());
     let client = github_client()?;
     let tags: serde_json::Value = github_api_get(
         &client,

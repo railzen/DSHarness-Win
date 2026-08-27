@@ -64,18 +64,16 @@ pub struct HarnessCore {
 pub fn active_source(app_handle: &AppHandle) -> CoreSource {
     let setting = config::get_store_dat_setting(app_handle);
     let local_present = local_core(app_handle).is_some();
+    // 全局 dsh 优先：核心页安装后立即成为桌面端实际运行的引擎。
+    if local_present {
+        return CoreSource::Local;
+    }
     match setting.active_core.as_deref().and_then(CoreSource::parse) {
         Some(CoreSource::App) => CoreSource::App,
         // 显式选择本地但本地已失效 → 回退预打包
         Some(CoreSource::Local) if local_present => CoreSource::Local,
         // 未设置（自动）或显式本地已失效：本地存在时优先
-        _ => {
-            if local_present {
-                CoreSource::Local
-            } else {
-                CoreSource::App
-            }
-        }
+        _ => CoreSource::App,
     }
 }
 

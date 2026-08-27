@@ -42,6 +42,8 @@ const initialInstaller: InstallerState = {
 let bootToken = 0
 /** 首次自动启动去重（React StrictMode 会重复挂载 effect） */
 let bootStarted = false
+/** 首次开机启动失败时只自动重启一次，避免故障时无限循环。 */
+let startupRecoveryAttempted = false
 
 /** 构建带时间戳的 iframe URL，避免 WebView2 缓存旧页面 */
 function generateTimestampedUrl(baseUrl: string): string {
@@ -353,6 +355,13 @@ export const harness = defineStore({
           return
         console.error('[Harness] startup failed:', err)
         const startupError = await attachStartupDiagnostics(err)
+        if (!startupRecoveryAttempted) {
+          startupRecoveryAttempted = true
+          // 开机时偶发 dsh 尚未就绪或进程刚退出，延迟一次完整重启再交给用户处理。
+          setTimeout(() => {
+            void this.restart()
+          }, 1000)
+        }
         const keepServiceRunning = startupError.readinessTimedOut === true
         this.fail(
           String(startupError),

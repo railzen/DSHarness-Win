@@ -1,6 +1,6 @@
 import type { HarnessCore } from '../hooks/use-dsh-cores'
 import { ArrowRotateRight, CircleArrowDown as DownloadIcon, FolderOpen } from '@gravity-ui/icons'
-import { Button, Checkbox, Chip, Description, Label, Spinner } from '@heroui/react'
+import { Button, Chip, Description, Label, Spinner } from '@heroui/react'
 import { useOverlay } from '@overlastic/react'
 import { invoke } from '@tauri-apps/api/core'
 import { useState } from 'react'
@@ -35,13 +35,12 @@ export function ConfigCore() {
   const [downloadDialogHolder, openDownloadDialog] = useOverlay(DownloadCoreDialog, { type: 'holder' })
 
   const { t } = useTranslation()
-  const { cores, loading, error, setActiveCore, updateLocalCore, downloadCore, removeCore, busy } = useDshCores()
+  const { cores, loading, error, setActiveCore, updateLocalCore, downloadCore, uninstallGlobalCore, busy } = useDshCores()
 
   /** 行内操作进行中的核心 id（该行的下载/卸载按钮显示 Spinner 并禁用重复点击） */
   const [busyId, setBusyId] = useState<string | null>(null)
 
   // 本地核心未检测到时不渲染 local 行（保留 local_missing_hint 提示）
-  const rows = cores.filter(core => !(core.source === 'local' && !core.present))
   const localCore = cores.find(c => c.source === 'local')
 
   // 本地核心是否有新版可更新：仅当存在更新的预打包发布时才显示「更新本地核心」。
@@ -50,6 +49,15 @@ export function ConfigCore() {
   const localVersion = localCore?.version ?? ''
   const latestVersion = cores.find(c => c.source === 'app')?.version ?? ''
   const hasLocalUpdate = !!(localCore?.present && localVersion && latestVersion && compareVersions(localVersion, latestVersion) < 0)
+  // 官方 tags 全部展示，用户可以随时选择任意版本全局安装。
+  const rowsToShow = cores.filter(core => {
+    if (core.source === 'local' && !core.present)
+      return false
+    // 全局当前版本已是最新版时，隐藏同版本的官方重复行。
+    if (core.source === 'app' && localCore?.present && core.version === localVersion)
+      return false
+    return true
+  })
 
   /** 包裹行内操作：全局单例守卫 + 该行 busy 标记 */
   async function runBusy(id: string, action: () => Promise<unknown>) {
@@ -132,34 +140,6 @@ export function ConfigCore() {
     }
   }
 
-  async function onRemove(core: HarnessCore) {
-    if (busy)
-      return
-    try {
-      await openDialog({
-        status: 'danger',
-        title: t('core.remove_confirm_title'),
-        description: (
-          <p>
-            {t('core.remove_confirm_desc', { version: displayVersion(core) })}
-          </p>
-        ),
-        confirmText: t('core.uninstall'),
-      })
-    }
-    catch {
-      return
-    }
-    try {
-      await runBusy(core.id, () => removeCore(core.id))
-      toast(t('core.uninstalled_toast', { version: displayVersion(core) }), {})
-    }
-    catch (err) {
-      console.error('[ConfigCore] remove failed:', err)
-      toast(t('core.remove_failed'), {})
-    }
-  }
-
   async function onUpdateLocal() {
     if (busy)
       return
@@ -177,6 +157,22 @@ export function ConfigCore() {
     }
   }
 
+  async function onUninstallGlobal() {
+    if (busy || !localCore?.present)
+      return
+    try {
+      await openDialog({ status: 'danger', title: t('core.remove_confirm_title'), description: <p>{t('core.remove_confirm_desc', { version: displayVersion(localCore) })}</p>, confirmText: t('core.uninstall') })
+      if (localCore.active)
+        await store.harness.shutdown()
+      await uninstallGlobalCore()
+      toast(t('core.uninstalled_toast', { version: displayVersion(localCore) }), {})
+    }
+    catch (err) {
+      console.error('[ConfigCore] global uninstall failed:', err)
+      toast(t('core.remove_failed'), {})
+    }
+  }
+
   return (
     <div className="space-y-3">
       <PanelHeader title={t('core.title')} description={t('core.tooltip')} />
@@ -184,10 +180,10 @@ export function ConfigCore() {
       {/* 加载 / 失败 / 列表 */}
       <PanelState loading={loading} error={error}>
         <div className="flex flex-col gap-4">
-          {rows.map(core => (
+          {rowsToShow.map(core => (
             <Item
               key={core.id}
-              onClick={core.present && !core.active ? () => onActivate(core) : undefined}
+              onClick={core.source === 'local' && core.present && !core.active ? () => onActivate(core) : undefined}
               left={(
                 <>
                   <Label className="min-w-0 truncate font-mono text-sm font-medium text-ink">
@@ -198,13 +194,13 @@ export function ConfigCore() {
                       {t('core.local')}
                     </Chip>
                   </If>
-                  <If cond={core.source === 'app'}>
+                  <If cond={core.version === latestVersion && (core.source === 'app' || core.source === 'local')}>
                     <Chip size="sm" variant="soft" color="default" className="shrink-0 font-medium">
-                      {t('core.app')}
+                      {t('core.latest')}
                     </Chip>
                   </If>
                   {/* 已下载：Chip 右侧的文件夹图标，点击打开所在目录 */}
-                  <If cond={core.present}>
+                  <If cond={core.source === 'local' && core.present}>
                     <Button
                       size="sm"
                       variant="tertiary"
@@ -229,22 +225,13 @@ export function ConfigCore() {
               right={(
                 <>
                   {/* 已下载：切换（选中当前使用版本） */}
-                  <If cond={core.present}>
-                    <Checkbox
-                      isSelected={core.active}
-                      isDisabled={busy}
-                      aria-label={core.version || core.id}
-                      className="shrink-0"
-                    >
-                      <Checkbox.Content>
-                        <Checkbox.Control>
-                          <Checkbox.Indicator />
-                        </Checkbox.Control>
-                      </Checkbox.Content>
-                    </Checkbox>
+                  <If cond={core.source === 'local' && core.present}>
+                    <Button size="sm" variant="danger" className="h-7 rounded-md text-xs" isDisabled={busy} onClick={(event) => { event.stopPropagation(); void onUninstallGlobal() }}>
+                      {t('core.uninstall')}
+                    </Button>
                   </If>
                   {/* 未下载（app 版本）：下载入口（进度与日志在下载对话框内展示） */}
-                  <If cond={!core.present && core.source === 'app'}>
+                  <If cond={core.source === 'app'}>
                     <Button
                       size="sm"
                       variant="tertiary"
@@ -260,21 +247,6 @@ export function ConfigCore() {
                     </Button>
                   </If>
                   {/* 已下载且非激活（app 版本）：卸载入口 */}
-                  <If cond={core.present && !core.active && core.source === 'app'}>
-                    <Button
-                      size="sm"
-                      variant="tertiary"
-                      className="h-7 rounded-md text-xs"
-                      isDisabled={busy}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        onRemove(core)
-                      }}
-                    >
-                      <If cond={busyId === core.id && busy} then={<Spinner size="sm" color="current" />} />
-                      {t('core.uninstall')}
-                    </Button>
-                  </If>
                   {/* 本地核心：已是最新时不显示；有新版时提供更新入口（与预打包行同栏，统一布局） */}
                   <If cond={core.source === 'local' && core.present && hasLocalUpdate}>
                     <Button

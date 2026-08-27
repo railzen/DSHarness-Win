@@ -329,6 +329,8 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
     let webview_builder =
         WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
             .title("Deepseek Harness Desktop")
+            // 显式绑定窗口图标，确保 Windows 11 无边框窗口在任务栏显示应用图标。
+            .icon(app.default_window_icon().unwrap().clone())?
             .inner_size(1280.0, 840.0)
             .min_inner_size(860.0, 620.0)
             .resizable(true);
@@ -502,6 +504,7 @@ pub fn handler() -> impl Fn(Invoke<Wry>) -> bool + Send + Sync + 'static {
         crate::bridge::download_core,
         crate::bridge::remove_core,
         crate::bridge::update_local_core,
+        crate::bridge::uninstall_global_core,
         crate::bridge::proxy_health_check,
         crate::bridge::get_runtime_info,
         crate::bridge::runtime_ready,

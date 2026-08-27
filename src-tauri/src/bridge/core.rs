@@ -29,7 +29,15 @@ pub async fn download_core(
     app_handle: AppHandle,
     tag: String,
 ) -> Result<core::HarnessCore, String> {
-    core::download_version(&app_handle, &tag).await
+    let info = crate::service::download::fetch_dsh_pkg_asset(&tag).await?;
+    let version = crate::service::download::parse_version_from_tag(&info.tag)
+        .ok_or_else(|| format!("CORE_INVALID_TAG: {}", info.tag))?;
+    core::install_global_core(&app_handle, &version).await?;
+    core::list(&app_handle)
+        .await
+        .into_iter()
+        .find(|item| item.source == core::CoreSource::Local && item.present)
+        .ok_or_else(|| "CORE_INSTALL_NOT_FOUND: global dsh is not visible on PATH".to_string())
 }
 
 /// 卸载已下载的历史版本（激活中的版本不可卸载）
@@ -43,4 +51,9 @@ pub async fn remove_core(app_handle: AppHandle, id: String) -> Result<(), String
 #[tauri::command]
 pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> {
     core::update_local_core(app_handle).await
+}
+
+#[tauri::command]
+pub async fn uninstall_global_core(app_handle: AppHandle) -> Result<(), String> {
+    core::uninstall_global_core(&app_handle).await
 }

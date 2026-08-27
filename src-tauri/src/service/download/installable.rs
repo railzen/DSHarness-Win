@@ -52,7 +52,8 @@ impl Installable for Dsh {
         config::get_dsh_install_path(app)
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
-        config::get_dsh_binary_path(app).exists()
+        crate::service::core::local_core_package_dir(app).is_some()
+            || config::get_dsh_binary_path(app).exists()
     }
 }
 

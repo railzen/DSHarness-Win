@@ -23,7 +23,7 @@ mod local;
 mod source;
 mod version;
 
-pub use local::{local_core_package_dir, update_local_core};
+pub use local::{install_global_core, local_core_package_dir, uninstall_global_core, update_local_core};
 // 以下重导出为对外公开 API（部分项当前链路未直接引用，属有意保留，见模块头）。
 #[allow(unused_imports)]
 pub use source::{active_dsh_binary, active_source, active_version, CoreSource, HarnessCore};

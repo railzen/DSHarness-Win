@@ -36,7 +36,7 @@ export function Webview() {
   if (status === 'error') {
     return (
       <main className="relative flex min-h-0 flex-1 flex-col bg-canvas">
-        <Navbar />
+        <Navbar iframeRef={iframeRef} />
         <div className="min-h-0 flex-1">
           <Setup />
         </div>
@@ -47,7 +47,7 @@ export function Webview() {
   if (status !== 'ready') {
     return (
       <main className="relative flex min-h-0 w-full flex-col bg-canvas">
-        <Navbar />
+        <Navbar iframeRef={iframeRef} />
         <div className="min-h-0 flex-1">
           <Setup />
         </div>
