@@ -3,6 +3,7 @@ import type { SetupStatus } from '@/store/modules/harness'
 import { ArrowDownToLine, CircleCheck, CircleExclamation, Magnifier, Rocket } from '@gravity-ui/icons'
 import { useTranslation } from 'react-i18next'
 import { useStore } from 'valtio-define'
+import { If } from 'react-if-lite'
 import { store } from '@/store'
 import { Loadable } from './loadable'
 
@@ -51,6 +52,11 @@ export function Setup() {
       errorMsg={error ? errorMsg : undefined}
       onRetry={error ? store.harness.boot : undefined}
     >
+      <If cond={Boolean(errorMsg?.includes('https://nodejs.org/'))}>
+        <a className="text-xs text-accent underline" href="https://nodejs.org/" target="_blank" rel="noreferrer">
+          {t('errors.node_required_link')}
+        </a>
+      </If>
       {hint && (
         <p className="m-0 text-xs leading-[18px] break-all text-load-muted">{hint}</p>
       )}

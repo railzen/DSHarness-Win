@@ -42,6 +42,7 @@
   "download.show_in_folder": "打开",
   "errors.service_start_timeout": "DeepSeek Harness 启动超时，请检查端口 {{port}} 是否被占用或启动过慢。",
   "errors.inotify_limit": "Harness 服务启动即崩溃：系统文件监视（inotify）数量达到上限。请调高监视上限后重试——例如执行 `sudo sysctl fs.inotify.max_user_watches=524288`（并将 `fs.inotify.max_user_watches=524288` 写入 `/etc/sysctl.conf` 以持久化），然后重启应用。",
+  "errors.node_required_link": "前往 Node.js 官网安装",
   "ui.service_url": "服务地址",
   "ui.port": "端口",
   "ui.zoom": "界面缩放",

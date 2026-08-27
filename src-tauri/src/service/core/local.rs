@@ -4,6 +4,7 @@
 //! [`crate::service::core`] 模块头的说明。
 
 use crate::service::cli;
+use crate::service::workflow;
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 #[cfg(unix)]
@@ -208,6 +209,10 @@ fn local_core_uses_pnpm(app_handle: &AppHandle) -> bool {
 ///
 /// 返回更新后的版本号。失败返回错误（附进程输出尾部，便于排查）。
 pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> {
+    if workflow::has_owned_process() {
+        workflow::stop(app_handle.clone()).await?;
+    }
+    workflow::terminate_stale_harness_processes(&app_handle);
     let Some(core) = local_core(&app_handle) else {
         return Err("CORE_LOCAL_NOT_FOUND: no local core to update".to_string());
     };
@@ -289,6 +294,10 @@ pub async fn update_local_core(app_handle: AppHandle) -> Result<String, String> 
 
 /// 将指定官方版本安装到用户的全局 npm 环境，供桌面端直接调用 PATH 中的 dsh。
 pub async fn install_global_core(app_handle: &AppHandle, version: &str) -> Result<String, String> {
+    if workflow::has_owned_process() {
+        workflow::stop(app_handle.clone()).await?;
+    }
+    workflow::terminate_stale_harness_processes(app_handle);
     let package = format!("@deepseek-ai/dsh@={version}");
     let program = if cfg!(windows) { "npm.cmd" } else { "npm" };
     let args = vec!["install".to_string(), "-g".to_string(), package];

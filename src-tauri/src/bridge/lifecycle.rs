@@ -64,6 +64,9 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
     // 以实际安装状态为准：本地安装与 GitHub 最新 release 的 commit hash
     // 不一致时，说明上游 pkg 有更新/修复，需要自动重新下载。
     let node_ok = download::Nodejs.check_installed(&app_handle);
+    if !node_ok {
+        return Err("NODE_SYSTEM_REQUIRED: 未检测到兼容的系统 Node.js，请先从官网安装：https://nodejs.org/".to_string());
+    }
     let dsh_files_ok = download::Dsh.check_installed(&app_handle);
     // pnpm 用于按官方 Release tag 安装精确版本的 Harness，必须使用捆绑版本。
     let pnpm_ok = download::Pnpm.check_installed(&app_handle);

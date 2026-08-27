@@ -388,7 +388,7 @@ pub fn terminate_stale_harness_processes(app_handle: &tauri::AppHandle) {
         // 路径中的单引号按 PS 字符串字面量规则转义，避免用户目录含 `'` 时语法错误。
         let escaped = dsh_bin.replace('\'', "''");
         let script = format!(
-            "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object {{ $_.CommandLine -like '*{escaped}*' }} | Select-Object -ExpandProperty ProcessId"
+            "Get-CimInstance Win32_Process -Filter \"Name = 'node.exe'\" | Where-Object {{ $_.CommandLine -like '*{escaped}*' -or $_.CommandLine -match '@deepseek-ai[\\\\/]dsh[\\\\/]lib[\\\\/]bin\\.js' }} | Select-Object -ExpandProperty ProcessId"
         );
         let Ok(output) = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])

@@ -26,14 +26,12 @@ impl Installable for Nodejs {
         config::get_node_install_path(app)
     }
     fn check_installed(&self, app: &AppHandle) -> bool {
+        let _ = app;
         if let Some(local_node) = config::get_local_node_path() {
-            log::info!(
-                "Detected compatible local Node.js ({}), skipping bundled runtime",
-                local_node.display()
-            );
+            log::info!("Detected compatible system Node.js: {}", local_node.display());
             return true;
         }
-        config::get_node_binary_path(app).exists() && config::is_runtime_compatible(app)
+        false
     }
 }
 

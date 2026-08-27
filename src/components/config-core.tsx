@@ -119,6 +119,7 @@ export function ConfigCore() {
         version: displayVersion(core),
         runDownload: tag => downloadCore(tag),
       })
+      await store.harness.start()
       toast(t('core.downloaded_toast', { version: displayVersion(core) }), {})
     }
     catch (err) {
@@ -146,6 +147,7 @@ export function ConfigCore() {
     setBusyId('local')
     try {
       const version = await updateLocalCore()
+      await store.harness.start()
       toast(t('core.updated_toast', { version: version || '—' }), {})
     }
     catch (err) {
