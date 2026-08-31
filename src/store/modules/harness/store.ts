@@ -42,10 +42,21 @@ const initialInstaller: InstallerState = {
 let bootToken = 0
 /** 首次自动启动去重（React StrictMode 会重复挂载 effect） */
 let bootStarted = false
+/** 本轮 boot 是否已成功走通第一下 IPC。首个 invoke 挂死时保持 false，看门狗再开一轮。 */
+let bootIpcReady = false
+/** 冷启动看门狗：后端 auto_start 往往已经把 dsh 拉起来，前端却卡在第一下 IPC。 */
+let coldStartWatchdog: ReturnType<typeof setInterval> | null = null
 /** 首次开机启动失败时只自动重启一次，避免故障时无限循环。 */
 let startupRecoveryAttempted = false
 /** 窗口连续激活时只允许一轮服务恢复探测，避免托盘双击并发启动。 */
 let activationRecoveryInProgress = false
+
+function stopColdStartWatchdog() {
+  if (!coldStartWatchdog)
+    return
+  clearInterval(coldStartWatchdog)
+  coldStartWatchdog = null
+}
 
 /** 构建带时间戳的 iframe URL，避免 WebView2 缓存旧页面 */
 function generateTimestampedUrl(baseUrl: string): string {
@@ -161,7 +172,59 @@ export const harness = defineStore({
       if (bootStarted)
         return
       bootStarted = true
+      bootIpcReady = false
       void this.boot()
+      // 托盘退出后再开：点「启动」能起来，是因为又开了一轮 boot。
+      // 首个 invoke 若挂死，这里按同样方式自动再试，并尝试附着已在跑的 dsh。
+      let ticks = 0
+      let ticking = false
+      stopColdStartWatchdog()
+      const harness = this
+      async function tickColdStartWatchdog() {
+        if (ticking || harness.serviceHealthy) {
+          if (harness.serviceHealthy)
+            stopColdStartWatchdog()
+          return
+        }
+        ticking = true
+        try {
+          ticks++
+          await harness.tryAttachRunning()
+          if (harness.serviceHealthy) {
+            stopColdStartWatchdog()
+            return
+          }
+          if (!bootIpcReady && ticks >= 2)
+            void harness.boot()
+          if (ticks >= 8)
+            stopColdStartWatchdog()
+        }
+        finally {
+          ticking = false
+        }
+      }
+      void tickColdStartWatchdog()
+      coldStartWatchdog = setInterval(() => {
+        void tickColdStartWatchdog()
+      }, 1500)
+    },
+
+    /**
+     * 后端 auto_start 已把 dsh 拉起来、前端 boot 还卡在 IPC 时，直接探测并挂上 iframe。
+     * 等价于用户看到「已停止」后点启动，但不必等那一下。
+     */
+    async tryAttachRunning() {
+      if (this.serviceHealthy || this.status === 'installing')
+        return
+      try {
+        const result = await checkHealthViaProxy()
+        if (!result.healthy)
+          return
+        await this.completeReadiness()
+      }
+      catch (err) {
+        console.warn('[Harness] attach running service failed:', err)
+      }
     },
 
     /** 窗口从托盘/单实例唤醒时核对服务；健康时不刷新页面，停止时重新启动。 */
@@ -170,6 +233,12 @@ export const harness = defineStore({
         return
       activationRecoveryInProgress = true
       try {
+        // 点过「停止」后再关窗口：进程还在托盘里，React 不会重新挂载，
+        // startup() 也不会再跑。服务已停就直接拉起，不必先做 8s 健康检查。
+        if (!this.serviceRunning) {
+          await this.start()
+          return
+        }
         const result = await checkHealthViaProxy()
         if (result.healthy) {
           this.serviceRunning = true
@@ -234,6 +303,7 @@ export const harness = defineStore({
       this.serviceHealthy = true
       this.serviceRunning = true
       this.status = 'ready'
+      stopColdStartWatchdog()
       this.errorMsg = ''
       this.errorLogs = []
       this.inotifyLimitHint = ''
@@ -334,15 +404,14 @@ export const harness = defineStore({
       let unlistenInstall: UnlistenFn | null = null
 
       try {
-        // 事件监听失败（例如 IPC 自定义协议被 CSP 拦截、回退 postMessage 也异常）
-        // 不应阻断启动流程，因此容错跳过。
-        try {
-          unlistenInstall = await this.listenInstallProgress()
-        }
-        catch (err) {
-          console.error('[Harness] failed to listen install-progress:', err)
-        }
+        console.info('[Harness] boot: start', token)
         const runtimeInfo = await invoke<{ service_url: string }>('get_runtime_info')
+        if (token !== bootToken)
+          return
+        if (this.serviceHealthy)
+          return
+        bootIpcReady = true
+        console.info('[Harness] boot: ipc ready')
         this.serviceUrl = runtimeInfo.service_url
         this.iframeSrc = generateTimestampedUrl(runtimeInfo.service_url)
 
@@ -356,6 +425,14 @@ export const harness = defineStore({
         // 已全部就绪时不调用安装命令，因此不会联网，也不会闪现安装界面。
         const ready = await invoke<boolean>('runtime_ready')
         if (!ready || !config.installed) {
+          // 只在真正安装时才订阅进度。冷启动若先 await listen，IPC 未就绪会
+          // 把 boot 卡住，表现为托盘退出后再开必须手动点「启动」。
+          try {
+            unlistenInstall = await this.listenInstallProgress()
+          }
+          catch (err) {
+            console.error('[Harness] failed to listen install-progress:', err)
+          }
           if (!ready) {
             this.status = 'installing'
             this.installer = { ...initialInstaller, title: i18next.t('status.installing') }

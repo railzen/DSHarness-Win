@@ -1,4 +1,3 @@
-#[cfg(windows)]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::Arc;
@@ -18,6 +17,15 @@ use tauri::menu::{PredefinedMenuItem, Submenu};
 #[cfg(target_os = "macos")]
 static MACOS_FULLSCREEN_MENU_ITEM: OnceLock<Mutex<Option<PredefinedMenuItem<Wry>>>> =
     OnceLock::new();
+
+/// 关闭按钮把窗口藏进托盘。再次显示时 React 不会重新挂载，必须靠激活事件
+/// 才能把已停止的 dsh 拉起来；任务栏点回来不会走 show_main_window。
+static MAIN_WINDOW_HIDDEN_TO_TRAY: AtomicBool = AtomicBool::new(false);
+/// 托盘「退出」必须真正结束进程。CloseRequested 一律 prevent_close 的话，
+/// app.exit(0) 会被窗口关闭拦截，下一次启动变成唤醒旧进程，startup() 不会再跑。
+static APP_IS_QUITTING: AtomicBool = AtomicBool::new(false);
+/// 固定托盘 id，退出时才能先摘图标再硬退，避免 Windows 幽灵托盘占着单例互斥量。
+const TRAY_ID: &str = "main";
 
 #[cfg(windows)]
 use crate::desktop::window::on_page_load;
@@ -109,12 +117,25 @@ pub fn tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         ],
     )?;
 
+    fn quit_app<R: Runtime>(app: &tauri::AppHandle<R>) {
+        APP_IS_QUITTING.store(true, Ordering::SeqCst);
+        // 硬退会跳过 RunEvent::Exit，必须先同步回收 dsh，否则下次启动会碰到
+        // 残留 node 锁 DLL / 端口。
+        crate::service::workflow::stop_owned_for_hard_exit();
+        let _ = app.remove_tray_by_id(TRAY_ID);
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.destroy();
+        }
+        // app.exit(0) 在「关窗 prevent_close + 托盘保活」下经常走不完事件循环，
+        // 单例互斥量不释放。快捷方式再开会被当成唤醒旧窗口：React 不重挂，
+        // startup() 不再跑，调试页一直「已停止」，只能手动点启动。
+        std::process::exit(0);
+    }
+
     fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, event: &MenuEvent) {
         match event.id().as_ref() {
             "open" => show_main_window(app),
-            "quit" => {
-                app.exit(0);
-            }
+            "quit" => quit_app(app),
             _ => {}
         }
     }
@@ -132,7 +153,7 @@ pub fn tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
     // 构建托盘图标。macOS 上把模板图标记为 NSImage template，由系统按菜单栏
     // 深浅/半透明材质自动着色，呈现与系统一致的半透明玻璃观感。
     #[cfg(target_os = "macos")]
-    let _ = TrayIconBuilder::new()
+    let _ = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .icon_as_template(true)
         .menu(&menu)
@@ -143,7 +164,7 @@ pub fn tray<R: Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<()> {
         .build(app)?;
 
     #[cfg(not(target_os = "macos"))]
-    let _ = TrayIconBuilder::new()
+    let _ = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -561,8 +582,21 @@ pub fn builder() -> tauri::Builder<tauri::Wry> {
         // 点击关闭按钮时隐藏到托盘而不是退出程序
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::CloseRequested { api, .. } => {
+                if APP_IS_QUITTING.load(Ordering::SeqCst) {
+                    return;
+                }
                 api.prevent_close();
+                MAIN_WINDOW_HIDDEN_TO_TRAY.store(true, Ordering::SeqCst);
                 let _ = window.hide();
+            }
+            // 从托盘/任务栏回到前台：关闭并不退出进程，前端不会再跑 startup()。
+            // 托盘点击会走 show_main_window；任务栏还原往往只有 Focused。
+            tauri::WindowEvent::Focused(true) => {
+                if MAIN_WINDOW_HIDDEN_TO_TRAY.swap(false, Ordering::SeqCst) {
+                    if let Err(error) = window.app_handle().emit("desktop-window-activated", ()) {
+                        log::warn!("[window] failed to emit activation after restore: {error}");
+                    }
+                }
             }
             // 移动/缩放主窗口时记录几何，重启后据此恢复（见 config::window_state）
             tauri::WindowEvent::Moved(_) => {

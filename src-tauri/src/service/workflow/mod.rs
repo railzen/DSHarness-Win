@@ -103,6 +103,21 @@ impl Drop for LaunchGuard {
 /// 复用配置端口；到期仍未释放才按“真占用”逐级递增。
 const PORT_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// 并发 `launch` 已占用守卫时，等待对方结束再决定是复用还是自己拉起。
+///
+/// 直接 `return Ok` 会让前端立刻开始健康检查：auto_start 若还在
+/// `wait_for_port_release`，此时无持有进程，容易误判失败。
+async fn wait_for_launch_guard_release() {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    while LAUNCH_GUARD.load(Ordering::SeqCst) {
+        if tokio::time::Instant::now() >= deadline {
+            log::warn!("Timed out waiting for in-progress Harness launch");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
 /// 轮询等待配置端口释放为空闲（端口本来就空闲则立即返回）。
 ///
 /// async（tokio）实现，避免长时间阻塞启动线程。与 `stop()` 里“给系统一点时间
@@ -752,8 +767,19 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
-        log::info!("Harness launch already in progress, skipping");
-        return Ok(());
+        log::info!("Harness launch already in progress, waiting for it to finish");
+        wait_for_launch_guard_release().await;
+        if has_owned_process() {
+            log::info!("Owned Harness process is running after waiting for in-progress launch");
+            return Ok(());
+        }
+        if LAUNCH_GUARD
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            log::info!("Harness launch still in progress, skipping");
+            return Ok(());
+        }
     }
     let _launch_guard = LaunchGuard;
     // 新版 dsh 的 token 每次启动都会变化；真实启动前先作废旧地址，避免启动窗口内
@@ -1001,9 +1027,14 @@ pub async fn stop(app_handle: tauri::AppHandle) -> Result<(), String> {
 ///
 /// 退出路径上不更新状态、不做异步等待，只结束当前应用持有的 Harness 进程树。
 pub fn stop_on_exit(app_handle: tauri::AppHandle, _port: u16) {
-    terminate_owned_process();
+    stop_owned_for_hard_exit();
     // 正常退出路径同样清理清扫标记（崩溃路径才需要下次启动清扫）
     let _ = fs::remove_file(harness_pid_path(&app_handle));
+}
+
+/// 托盘硬退跳过 `RunEvent::Exit`，仍须先杀掉持有的 Harness。
+pub fn stop_owned_for_hard_exit() {
+    terminate_owned_process();
 }
 
 /// 安装环境（Node.js 运行时 + pnpm + 官方 Harness Release 对应的 npm 包）。
@@ -1181,10 +1212,10 @@ pub async fn install(
 ///
 /// `launch` 仍在进行（LAUNCH_GUARD 未释放）时，无持有进程是**临时**状态：`launch`
 /// 已抢到守卫、尚未把持有进程登记进槽位（spawn 未完成，典型为 auto_start 与前端
-/// boot 并发拉起——前端 `launch_harness` 命中“launch already in progress, skipping”
-/// 后立刻来探测，此刻 `wait_for_port_release` 可能仍在等待端口回落）。若把这种
-/// 临时状态当作 `HARNESS_NOT_OWNED`，前端会命中快速失败分支（`notOwned` → 立即
-/// 放弃重试），表现为“首次启动超时、刷新/重试后恢复”。
+/// boot 并发拉起——前端 `launch_harness` 会等守卫，但侧栏/调度探测仍可能在
+/// `wait_for_port_release` 期间打进来）。若把这种临时状态当作 `HARNESS_NOT_OWNED`，
+/// 前端会命中快速失败分支（`notOwned` → 立即放弃重试），表现为“首次启动超时、
+/// 刷新/重试后恢复”。
 ///
 /// 因此 `launch` 仍在进行时返回可重试的“启动中”（`HARNESS_NOT_READY`），让前端
 /// 继续轮询；守卫已释放却仍无持有进程，才是真正崩溃/从未拉起（进程随后退出、槽位
