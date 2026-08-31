@@ -1,3 +1,4 @@
+import { listen } from '@tauri-apps/api/event'
 import { useEffect } from 'react'
 import { If } from 'react-if-lite'
 import { useStore } from 'valtio-define'
@@ -21,6 +22,29 @@ export function App() {
   // 首次挂载自动启动 harness（store 内部对 StrictMode 重复挂载去重）
   useEffect(() => {
     store.harness.startup()
+  }, [])
+
+  // 关闭窗口只会隐藏到托盘；再次打开不会重新挂载 React，因此监听后端统一的
+  // 激活事件，在现有页面中重新核对并按需启动 dsh。
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    async function listenWindowActivation() {
+      const stop = await listen('desktop-window-activated', () => {
+        void store.harness.resumeOnActivation()
+      })
+      if (disposed)
+        stop()
+      else
+        unlisten = stop
+    }
+
+    void listenWindowActivation()
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
   }, [])
 
   return (

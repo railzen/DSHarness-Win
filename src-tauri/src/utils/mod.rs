@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Manager, Runtime, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow};
 
 pub fn show_window<R: Runtime>(window: &WebviewWindow<R>) {
     let _ = window.unminimize();
@@ -12,6 +12,12 @@ pub fn show_window<R: Runtime>(window: &WebviewWindow<R>) {
 pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     if let Some(window) = app.get_webview_window("main") {
         show_window(&window);
+        // 关闭按钮只隐藏窗口；托盘打开、Dock Reopen 或再次运行快捷方式都不会
+        // 重新创建前端。显式通知现有页面重新核对 dsh，正常运行时前端只探测、
+        // 已停止或崩溃时才执行幂等启动。
+        if let Err(error) = app.emit("desktop-window-activated", ()) {
+            log::warn!("[window] failed to emit activation event: {error}");
+        }
     } else {
         log::warn!("[window] main window not found, skip show");
     }

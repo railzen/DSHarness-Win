@@ -2,7 +2,7 @@
 
 在 Windows、macOS 和 Linux 桌面上一键运行 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。这是一个基于 Tauri 2 的桌面封装，提供本地窗口、启动管理和 `dsh` 命令行入口。
 
-## 当前版本：v0.0.2
+## 当前版本：v0.0.3
 
 - 初始版本，作为上游 DeepSeek Harness 的桌面端封装。
 - 用于降低上游频繁更新对使用体验的影响。
@@ -22,4 +22,3 @@
 
 - [deepseek-harness-desktop](https://github.com/dsh-tauri-desk/deepseek-harness-desktop) — 上游 Harness 项目
 - [MIT](./LICENSE)，额外遵循上游[非商用条款](./LICENSE.details) 
-

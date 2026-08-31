@@ -193,8 +193,32 @@ fn web_supports_no_open_flag(app_handle: &tauri::AppHandle) -> bool {
     }
 }
 
+/// Windows WebView2 中父页面是 `http://tauri.localhost`。使用其子域名承载
+/// Harness iframe，使新版 dsh 的 `SameSite=Strict` 会话 Cookie 仍属于同一站点。
+#[cfg(windows)]
+const EMBEDDED_DSH_HOST: &str = "dsh.tauri.localhost";
+
+/// `--trusted-host` 与浏览器认证同时在 0.1.2-alpha.2 引入；旧版收到未知参数会退出。
+fn version_supports_trusted_host(version: &str) -> bool {
+    const TRUSTED_HOST_MIN_VERSION: &str = "0.1.2-alpha.2";
+    let Ok(min) = semver::Version::parse(TRUSTED_HOST_MIN_VERSION) else {
+        return false;
+    };
+    semver::Version::parse(version)
+        .map(|v| v >= min)
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn web_supports_trusted_host_flag(app_handle: &tauri::AppHandle) -> bool {
+    crate::service::core::active_version(app_handle)
+        .map(|version| version_supports_trusted_host(&version))
+        .unwrap_or(false)
+}
+
 /// 只结束本应用当前进程创建并仍持有的 Harness 进程树。
 fn terminate_owned_process() {
+    utils::clear_authenticated_service_url();
     // 一次性取出 PID+句柄（成对），杜绝「PID 已清空/句柄未清」的漏杀窗口
     let Some(owned) = take_owned_process() else {
         return;
@@ -344,6 +368,7 @@ pub fn has_owned_process() -> bool {
 /// （tick 与监视线程并发）只会生效一次，后续调用返回 None。
 fn on_owned_process_exit(pid: u32) -> Option<OwnedProcess> {
     let owned = take_owned_process_if(pid)?;
+    utils::clear_authenticated_service_url();
 
     log::warn!(
         "Owned Harness process {} exited; resetting status to Stopped",
@@ -731,6 +756,9 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     let _launch_guard = LaunchGuard;
+    // 新版 dsh 的 token 每次启动都会变化；真实启动前先作废旧地址，避免启动窗口内
+    // 把上一进程的凭据交给健康检查或 iframe。
+    utils::clear_authenticated_service_url();
 
     // 端口自愈：自动避让递增（配置端口被占 → 逐级顶高）遗留的非默认端口，
     // 在回落目标（用户手动端口 manual_port，否则默认端口）空闲时回落，避免
@@ -837,6 +865,10 @@ pub async fn launch(app_handle: tauri::AppHandle) -> Result<(), String> {
             ];
             if no_open {
                 args.push(OsString::from("--no-open"));
+            }
+            if web_supports_trusted_host_flag(&app_handle) {
+                args.push(OsString::from("--trusted-host"));
+                args.push(OsString::from(EMBEDDED_DSH_HOST));
             }
             win_spawn::spawn_with_hidden_console_owned(
                 &node_binary_path,
@@ -1171,6 +1203,34 @@ pub async fn proxy_health_check(port: u16) -> Result<String, String> {
     if !has_owned_process() {
         return Err(not_owned_probe_signal(LAUNCH_GUARD.load(Ordering::SeqCst)).to_string());
     }
+    // 0.1.2-alpha.2 起 Web 页面启用启动 token：dsh 只在插件 Loader 完成后输出
+    // `dsh web: ...?token=...`，访问该地址会以 303 换取浏览器 Cookie。此信号同时
+    // 证明 Loader 已就绪；禁用自动重定向，避免无 Cookie 客户端跟到 `/` 后得到 401。
+    if let Some(authenticated_url) = utils::authenticated_service_url(port) {
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(config::HEALTH_CHECK_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| format!("HARNESS_HEALTH_CLIENT_FAILED: {e}"))?;
+        match client.get(&authenticated_url).send().await {
+            Ok(response) if response.status() == reqwest::StatusCode::SEE_OTHER => {
+                return Ok(format!("healthy - {} - authenticated", response.status()));
+            }
+            Ok(response) => {
+                log::debug!(
+                    "Authenticated Harness health check returned {}",
+                    response.status()
+                );
+            }
+            Err(err) => {
+                log::debug!("Authenticated Harness health check failed: {err}");
+            }
+        }
+        return Err("HARNESS_NOT_READY: Harness authentication is not ready".to_string());
+    }
+
+    // 旧版 dsh 没有启动 token，继续用客户端插件 bundle 判断 Loader 是否完成。
     let client = utils::loopback_http_client(config::HEALTH_CHECK_TIMEOUT)
         .map_err(|e| format!("HARNESS_HEALTH_CLIENT_FAILED: {e}"))?;
     let mut failures = Vec::with_capacity(2);
@@ -1200,6 +1260,15 @@ pub async fn proxy_health_check(port: u16) -> Result<String, String> {
         "HARNESS_NOT_READY: Harness client plugins are not ready ({})",
         failures.join("; ")
     ))
+}
+
+/// 返回可交给 WebView/浏览器的服务地址；新版优先使用当前进程公布的认证 URL。
+pub fn service_url(port: u16) -> String {
+    #[cfg(windows)]
+    if let Some(url) = utils::authenticated_service_url_for_host(port, EMBEDDED_DSH_HOST) {
+        return url;
+    }
+    utils::authenticated_service_url(port).unwrap_or_else(|| config::get_dsh_service_url(port))
 }
 
 #[cfg(test)]
@@ -1295,6 +1364,15 @@ mod tests {
         assert!(!version_supports_no_open("0.1"));
         assert!(!version_supports_no_open("v0.1.0"));
         assert!(!version_supports_no_open("not-a-version"));
+    }
+
+    #[test]
+    fn trusted_host_starts_with_browser_auth_release() {
+        assert!(!version_supports_trusted_host("0.1.2-alpha.1"));
+        assert!(version_supports_trusted_host("0.1.2-alpha.2"));
+        assert!(version_supports_trusted_host("0.1.2"));
+        assert!(version_supports_trusted_host("0.2.0"));
+        assert!(!version_supports_trusted_host("not-semver"));
     }
 
     /// 构造一个测试用 `OwnedProcess`（跨平台处理 Windows 句柄字段）。

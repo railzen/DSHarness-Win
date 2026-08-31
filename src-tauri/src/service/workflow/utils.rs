@@ -8,8 +8,78 @@ use std::time::Duration;
 const DSH_MAX_LOG_BYTES: u64 = 5 * 1024 * 1024;
 const DSH_MAX_BACKUPS: usize = 3;
 static DSH_LOG_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static AUTHENTICATED_SERVICE_URL: OnceLock<Mutex<Option<(u16, String)>>> = OnceLock::new();
 fn dsh_log_lock() -> &'static Mutex<()> {
     DSH_LOG_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn authenticated_service_url_lock() -> &'static Mutex<Option<(u16, String)>> {
+    AUTHENTICATED_SERVICE_URL.get_or_init(|| Mutex::new(None))
+}
+
+/// 从新版 dsh 的就绪输出中提取仅指向本机的认证地址。
+///
+/// token 是每次进程启动随机生成的，不能从配置推导；同时严格限制协议、主机、
+/// 路径与查询参数，避免把未来日志里的任意外部 URL 交给 WebView 或系统浏览器。
+fn parse_authenticated_service_url(line: &str) -> Option<(u16, String)> {
+    let raw = line.strip_prefix("dsh web: ")?.split_whitespace().next()?;
+    let url = reqwest::Url::parse(raw).ok()?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || url.path() != "/"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let port = url.port()?;
+    let mut query = url.query_pairs();
+    let (name, token) = query.next()?;
+    if name != "token" || token.is_empty() || query.next().is_some() {
+        return None;
+    }
+    Some((port, url.to_string()))
+}
+
+/// 记录当前 dsh 进程公布的认证 URL；旧版无 token 的输出保持原有探测流程。
+fn record_authenticated_service_url(line: &str) {
+    let Some(value) = parse_authenticated_service_url(line) else {
+        return;
+    };
+    let mut guard = authenticated_service_url_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = Some(value);
+}
+
+/// 返回指定端口当前有效的认证 URL，避免端口切换后复用旧进程凭据。
+pub(super) fn authenticated_service_url(port: u16) -> Option<String> {
+    authenticated_service_url_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .filter(|(recorded_port, _)| *recorded_port == port)
+        .map(|(_, url)| url.clone())
+}
+
+/// 把当前认证 URL 的主机替换为桌面 WebView 使用的同站点回环域名。
+///
+/// token 由 dsh 进程校验、并不绑定 URL 主机；端口与其余 URL 组件保持不变。
+/// 调用方必须同时通过 `--trusted-host` 把该域名加入 dsh 的 Host/API 信任边界。
+pub(super) fn authenticated_service_url_for_host(port: u16, host: &str) -> Option<String> {
+    let raw = authenticated_service_url(port)?;
+    let mut url = reqwest::Url::parse(&raw).ok()?;
+    url.set_host(Some(host)).ok()?;
+    Some(url.to_string())
+}
+
+/// 新进程启动或旧进程退出时立即作废上一次的启动 token。
+pub(super) fn clear_authenticated_service_url() {
+    let mut guard = authenticated_service_url_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    *guard = None;
 }
 
 /// 构造仅用于回环地址探测的 HTTP 客户端。
@@ -105,6 +175,7 @@ where
             for line in reader.lines() {
                 match line {
                     Ok(line) => {
+                        record_authenticated_service_url(&line);
                         log::info!(target: "dsh", "{}", line);
                         append_log(&log_path, &line);
                     }
@@ -263,6 +334,54 @@ mod tests {
         assert!(urls
             .iter()
             .any(|u| u.contains("dsh-client-ui-layout/client.js")));
+    }
+
+    #[test]
+    fn authenticated_service_url_is_parsed_from_ready_line() {
+        assert_eq!(
+            parse_authenticated_service_url("dsh web: http://127.0.0.1:3081/?token=abc_DEF-123"),
+            Some((3081, "http://127.0.0.1:3081/?token=abc_DEF-123".to_string()))
+        );
+        // LAN 地址即使跟在本机地址后，也只采纳第一个受限的回环地址。
+        assert_eq!(
+            parse_authenticated_service_url(
+                "dsh web: http://127.0.0.1:3080/?token=local (LAN: http://10.0.0.2:3080/?token=lan)"
+            )
+            .map(|value| value.0),
+            Some(3080)
+        );
+    }
+
+    #[test]
+    fn authenticated_service_url_rejects_untrusted_or_malformed_lines() {
+        assert!(parse_authenticated_service_url("dsh web: http://127.0.0.1:3081").is_none());
+        assert!(
+            parse_authenticated_service_url("dsh web: http://example.com:3081/?token=secret")
+                .is_none()
+        );
+        assert!(parse_authenticated_service_url(
+            "dsh web: http://127.0.0.1:3081/path?token=secret"
+        )
+        .is_none());
+        assert!(parse_authenticated_service_url(
+            "dsh web: http://127.0.0.1:3081/?token=secret&next=evil"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn authenticated_service_url_can_use_same_site_loopback_host() {
+        let (port, raw) =
+            parse_authenticated_service_url("dsh web: http://127.0.0.1:3081/?token=abc_DEF-123")
+                .expect("parse authenticated URL");
+        let mut url = reqwest::Url::parse(&raw).expect("parse stored URL");
+        url.set_host(Some("dsh.tauri.localhost"))
+            .expect("replace loopback host");
+        assert_eq!(port, 3081);
+        assert_eq!(
+            url.as_str(),
+            "http://dsh.tauri.localhost:3081/?token=abc_DEF-123"
+        );
     }
 
     #[test]

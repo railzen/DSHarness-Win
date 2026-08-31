@@ -44,6 +44,8 @@ let bootToken = 0
 let bootStarted = false
 /** 首次开机启动失败时只自动重启一次，避免故障时无限循环。 */
 let startupRecoveryAttempted = false
+/** 窗口连续激活时只允许一轮服务恢复探测，避免托盘双击并发启动。 */
+let activationRecoveryInProgress = false
 
 /** 构建带时间戳的 iframe URL，避免 WebView2 缓存旧页面 */
 function generateTimestampedUrl(baseUrl: string): string {
@@ -160,6 +162,26 @@ export const harness = defineStore({
         return
       bootStarted = true
       void this.boot()
+    },
+
+    /** 窗口从托盘/单实例唤醒时核对服务；健康时不刷新页面，停止时重新启动。 */
+    async resumeOnActivation() {
+      if (activationRecoveryInProgress || this.busyAction)
+        return
+      activationRecoveryInProgress = true
+      try {
+        const result = await checkHealthViaProxy()
+        if (result.healthy) {
+          this.serviceRunning = true
+          if (!this.serviceHealthy || this.iframeError)
+            await this.completeReadiness()
+          return
+        }
+        await this.start()
+      }
+      finally {
+        activationRecoveryInProgress = false
+      }
     },
 
     /** 刷新 iframe：清除加载态并延迟重新挂载 */

@@ -21,13 +21,16 @@ pub async fn proxy_health_check(app_handle: AppHandle) -> Result<String, String>
 #[tauri::command]
 pub async fn get_runtime_info(app_handle: AppHandle) -> Result<config::RuntimeInfo, String> {
     let port = config::get_store_dat_setting(&app_handle).port;
-    Ok(config::runtime_info(&app_handle, port))
+    let mut info = config::runtime_info(&app_handle, port);
+    info.service_url = crate::service::workflow::service_url(port);
+    Ok(info)
 }
 
 /// 在系统浏览器中打开 Harness 界面
 #[tauri::command]
 pub async fn open_in_browser(app_handle: AppHandle) -> Result<(), String> {
-    let url = config::get_dsh_service_url(config::get_store_dat_setting(&app_handle).port);
+    let url =
+        crate::service::workflow::service_url(config::get_store_dat_setting(&app_handle).port);
     app_handle
         .opener()
         .open_url(url, None::<&str>)
@@ -37,7 +40,8 @@ pub async fn open_in_browser(app_handle: AppHandle) -> Result<(), String> {
 /// 复制 Harness 服务地址到剪贴板
 #[tauri::command]
 pub async fn copy_service_url(app_handle: AppHandle) -> Result<(), String> {
-    let url = config::get_dsh_service_url(config::get_store_dat_setting(&app_handle).port);
+    let url =
+        crate::service::workflow::service_url(config::get_store_dat_setting(&app_handle).port);
     app_handle
         .clipboard()
         .write_text(url)
