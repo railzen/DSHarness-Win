@@ -818,72 +818,56 @@ pub enum UpdateCheck {
 /// 结合本地记录与实际安装文件判定是否有新版 Harness 可用。
 ///
 /// 本地记录（release commit + tag）由安装流程写入；但当安装文件被外围途径
-/// 更新、或安装时 GitHub API 失败未落盘，记录会滞后于文件，造成每次都误报
-/// 更新。这里以磁盘上实际的 `@deepseek-ai/dsh` 版本为准核对：
-/// - 最新 release 版本号与已装版本不同 → 有更新（不论 commit）；
-/// - 版本号相同且记录对应同一 release（commit 任一形态匹配，或记录 tag 相同）→ 无更新；
-/// - 版本号相同但记录是同一版本的另一发布（不同 build-id 的 tag）→ 同版本热修 → 有更新；
-///   记录 tag 版本更旧（或记录无 tag，经 `legacy_tags` 反查）→ 记录滞后 → 修正记录。
+/// 更新、或安装时未落盘记录，记录会滞后于文件，造成每次都误报更新。
+/// npm-only 模式以 `dist-tags.latest` 和磁盘实际版本的语义化版本顺序为准：
+/// - 已装版本低于 npm latest → 有更新；
+/// - 已装版本等于 npm latest → 无更新，记录不一致时只修正记录；
+/// - 已装版本高于 npm latest（例如手动安装 alpha）→ 无更新，绝不提示降级。
 ///
 /// 注意必须先比版本、再比 commit：dsh 仓库的 rc 发布会重打同一 git commit，
 /// 因此「最新 release 的 commit 等于已装记录的 commit」并不代表没有更新，
 /// 只有 tag 里的版本号才能正确区分（如 rc.8 之于 rc.7）。
 ///
-/// `legacy_tags` 是 pkg 仓库的 tags 列表（tag, commit），仅用于反查历史安装
-/// 记录的版本；反查不到时以实际文件为准（视为记录滞后）。
 pub fn resolve_update(
     record_commit: Option<&str>,
     record_tag: Option<&str>,
     installed_version: Option<&str>,
     latest: &LatestDshPkg,
-    legacy_tags: &[(String, String)],
+    _legacy_tags: &[(String, String)],
 ) -> UpdateCheck {
-    let (Some(installed), Some(latest_version)) =
-        (installed_version, parse_version_from_tag(&latest.tag))
-    else {
-        // 版本信息不可解析时回退旧行为：记录不一致即视为有更新
-        return if record_matches_latest_release(record_commit, record_tag, latest) {
+    let fallback = || {
+        if record_matches_latest_release(record_commit, record_tag, latest) {
             UpdateCheck::UpToDate
         } else {
             UpdateCheck::UpdateAvailable
-        };
+        }
+    };
+    let (Some(installed), Some(latest_version_text)) =
+        (installed_version, parse_version_from_tag(&latest.tag))
+    else {
+        // 版本信息不可解析时回退旧行为：记录不一致即视为有更新
+        return fallback();
+    };
+    let (Ok(installed), Ok(latest_version)) = (
+        semver::Version::parse(installed),
+        semver::Version::parse(&latest_version_text),
+    ) else {
+        return fallback();
     };
 
-    // 先按“最新 release 的版本号”判定：与已装版本不同 → 有更新。
-    // 不能先看 commit 相等就跳过：dsh 仓库的 rc 发布可能重打同一 git commit
-    // （build-id 不同但 underlying commit 相同），此时 commit 不是可分辨信号，
-    // 只有 tag 里的版本号才能正确识别 rc.8 之于 rc.7 是更新。
-    if installed != latest_version {
+    // 只有 npm latest 严格更新时才提示；本机版本更新时不得反向“升级”到旧版。
+    if installed < latest_version {
         return UpdateCheck::UpdateAvailable;
     }
-    // npm-only 模式以实际安装版本为唯一依据；同版本不因旧记录而误报更新。
-    if !record_matches_latest_release(record_commit, record_tag, latest) {
-        return UpdateCheck::HealUpToDate;
+    if installed > latest_version {
+        return UpdateCheck::UpToDate;
     }
-    // 版本相同 → 确认是否「同一发布」再判免打扰：记录与最新 release 对应
-    // （见 [`record_matches_latest_release`]）即文件已是最新，无更新。
+
+    // 版本相同：记录一致则完全最新；记录滞后只自愈，不提示更新。
     if record_matches_latest_release(record_commit, record_tag, latest) {
         return UpdateCheck::UpToDate;
     }
-    // 文件已经是“最新版本”，此时需要甄别记录是否滞后
-    match record_tag.and_then(parse_version_from_tag) {
-        Some(record_version) if record_version < latest_version => UpdateCheck::HealUpToDate,
-        Some(_) => UpdateCheck::UpdateAvailable,
-        None => match legacy_tags
-            .iter()
-            .find(|(_, commit)| Some(commit.as_str()) == record_commit)
-        {
-            Some((tag, _)) => match parse_version_from_tag(tag) {
-                Some(record_version) if record_version < latest_version => {
-                    UpdateCheck::HealUpToDate
-                }
-                // 反查到的版本与最新版本相同（或解析失败）→ 视为同版本热修
-                _ => UpdateCheck::UpdateAvailable,
-            },
-            // 无法考证记录对应的版本 → 以实际安装文件为准，修正记录
-            None => UpdateCheck::HealUpToDate,
-        },
-    }
+    UpdateCheck::HealUpToDate
 }
 
 /// 拉取 pkg 仓库的 release tag 列表（tag, commit），用于反查历史记录对应的版本。
@@ -1223,8 +1207,22 @@ mod tests {
     }
 
     #[test]
-    fn resolve_same_version_hotfix_is_update() {
-        // 记录正确（与文件一致），最新 release 是同版本热修：应提示更新
+    fn resolve_newer_installed_version_does_not_downgrade() {
+        // 本机手动安装了更新的 alpha，npm stable latest 仍是旧 rc：不得提示或降级。
+        let latest = latest("dsh-v0.1.1-rc.2", "0.1.1-rc.2");
+        let decision = resolve_update(
+            Some("0.1.1-rc.2"),
+            Some("dsh-v0.1.1-rc.2"),
+            Some("0.1.2-alpha.2"),
+            &latest,
+            &[],
+        );
+        assert_eq!(decision, UpdateCheck::UpToDate);
+    }
+
+    #[test]
+    fn resolve_same_version_record_difference_only_heals() {
+        // npm-only 模式只按版本触发；同版本记录差异只自愈，不循环提示。
         let latest = latest(
             "dsh-0.1.0-rc.6-31773193667",
             "564019027fd9469991aef6e57bb0a96325491c4e",
@@ -1236,7 +1234,7 @@ mod tests {
             &latest,
             &[],
         );
-        assert_eq!(decision, UpdateCheck::UpdateAvailable);
+        assert_eq!(decision, UpdateCheck::HealUpToDate);
     }
 
     #[test]
@@ -1278,8 +1276,8 @@ mod tests {
     }
 
     #[test]
-    fn resolve_legacy_same_version_still_updates() {
-        // 老记录无 tag 但反查为同版本热修：仍应提示
+    fn resolve_legacy_same_version_only_heals() {
+        // 老记录无 tag 时同版本仍只修复记录，不提示更新。
         let latest = latest(
             "dsh-0.1.0-rc.6-31773193667",
             "564019027fd9469991aef6e57bb0a96325491c4e",
@@ -1295,7 +1293,7 @@ mod tests {
             &latest,
             &tags,
         );
-        assert_eq!(decision, UpdateCheck::UpdateAvailable);
+        assert_eq!(decision, UpdateCheck::HealUpToDate);
     }
 
     #[test]

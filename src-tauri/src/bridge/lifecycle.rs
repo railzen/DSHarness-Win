@@ -184,8 +184,8 @@ pub async fn install_dependencies(app_handle: AppHandle) -> Result<bool, String>
 /// 静默检查是否有新版 Harness 可用（只查不装，供进入页面后后台调用）
 ///
 /// 以“实际安装文件”为准核对，而不是只看本地记录：记录可能因安装时 API
-/// 失败或外围途径更新而滞后于文件，此时修正记录并免打扰；同版本热修
-/// （版本相同但 commit 不同）仍正常提示。
+/// 失败或外围途径更新而滞后于文件，此时修正记录并免打扰。只在 npm latest
+/// 的语义化版本严格高于磁盘实际版本时提示，绝不把更新的 alpha 降到旧 stable。
 #[tauri::command]
 pub async fn check_dsh_update(
     app_handle: AppHandle,
