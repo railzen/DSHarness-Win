@@ -7,6 +7,17 @@
 //!
 //! 注入通道与 [`crate::desktop::nav::NAV_SHIM_JS`] 相同。
 
+/// Windows 桌面壳持有并只向回环地址启动 dsh Host。认证 iframe 必须使用
+/// `dsh.tauri.localhost` 保持 SameSite Cookie，因此在插件启动前通过 dsh 官方
+/// transport hook 明确声明 Host 归当前壳所有，让本机设置仍使用持久化 Host scope。
+#[cfg(windows)]
+pub(crate) const EMBEDDED_HOST_TRANSPORT_JS: &str = r#"(function () {
+  if (location.hostname !== 'dsh.tauri.localhost') return;
+  var current = globalThis.__DSH_TRANSPORT__;
+  if (current != null && typeof current !== 'object') return;
+  globalThis.__DSH_TRANSPORT__ = Object.assign({}, current || {}, { ownsHost: true });
+})();"#;
+
 /// iframe 内：boot 页卡住时自动 reload 一次（sessionStorage 防循环）。
 pub(crate) const PLUGIN_BOOT_RELOAD_JS: &str = r#"(function () {
   if (window.__dsh_plugin_boot_reload__) return;
@@ -43,5 +54,13 @@ mod tests {
         assert!(PLUGIN_BOOT_RELOAD_JS.contains("sessionStorage"));
         assert!(PLUGIN_BOOT_RELOAD_JS.contains("window === window.top"));
         assert!(PLUGIN_BOOT_RELOAD_JS.contains("location.reload"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn embedded_host_transport_is_scoped_and_marks_host_owned() {
+        assert!(EMBEDDED_HOST_TRANSPORT_JS.contains("dsh.tauri.localhost"));
+        assert!(EMBEDDED_HOST_TRANSPORT_JS.contains("__DSH_TRANSPORT__"));
+        assert!(EMBEDDED_HOST_TRANSPORT_JS.contains("ownsHost: true"));
     }
 }

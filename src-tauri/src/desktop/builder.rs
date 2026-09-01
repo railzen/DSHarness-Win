@@ -418,13 +418,18 @@ pub fn build_main_window(app: &tauri::AppHandle<Wry>) -> tauri::Result<tauri::We
         .on_download(|webview, event| on_download(webview, event));
 
     #[cfg(windows)]
-    let webview_builder = webview_builder.on_page_load(move |webview_window, payload| {
-        on_page_load(
-            webview_window,
-            payload,
-            notification_handlers_registered_for_page.clone(),
+    let webview_builder = webview_builder
+        // 该标志必须先于 dsh 插件启动读取，文档创建前注入可避免 ContentLoading 异步竞态。
+        .initialization_script_for_all_frames(
+            crate::desktop::plugin_boot::EMBEDDED_HOST_TRANSPORT_JS,
         )
-    });
+        .on_page_load(move |webview_window, payload| {
+            on_page_load(
+                webview_window,
+                payload,
+                notification_handlers_registered_for_page.clone(),
+            )
+        });
 
     // 非 Windows（macOS/Linux）没有 WebView2 的 FrameCreated/ContentLoading 流程，
     // 直接用 Tauri 的 initialization_script_for_all_frames 把兼容桥、通知桥、导航桥、
