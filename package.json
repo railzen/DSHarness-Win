@@ -6,8 +6,9 @@
   "packageManager": "pnpm@10.28.2",
   "description": "Desktop application for DeepSeek Harness (dsh) — one-click local install and launch, no Node.js setup required.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "tsx scripts/fetch-pnpm.ts && vite",
+    "build": "tsx scripts/fetch-pnpm.ts && tsc && vite build",
+    "fetch:pnpm": "tsx scripts/fetch-pnpm.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "release": "bumpp --pr",

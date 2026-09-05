@@ -208,13 +208,33 @@ fn pnpm_base_url(region: Region) -> &'static str {
     }
 }
 
+/// pnpm 官方 tarball 文件名（下载与随包资源共用同一名字）
+pub fn pnpm_tarball_name() -> String {
+    format!("pnpm-{PNPM_VERSION}.tgz")
+}
+
 /// pnpm 下载地址（纯 JS 发行，全平台同一 URL）
 pub fn get_pnpm_download_url() -> String {
     format!(
-        "{}pnpm-{}.tgz",
+        "{}{}",
         pnpm_base_url(detect_region()),
-        PNPM_VERSION
+        pnpm_tarball_name()
     )
+}
+
+/// 安装包内随附的 pnpm tarball（`resources/pnpm/pnpm-<ver>.tgz`）。
+///
+/// 构建时由 `scripts/fetch-pnpm.ts` 放入 `src-tauri/resources/pnpm/`，
+/// 不存在（如本地开发未拉取）时返回 None，调用方退回联网下载。
+pub fn get_bundled_pnpm_tarball<R: Runtime>(app_handle: &AppHandle<R>) -> Option<PathBuf> {
+    let path = app_handle
+        .path()
+        .resource_dir()
+        .ok()?
+        .join("resources")
+        .join(PNPM_CORE_DIR)
+        .join(pnpm_tarball_name());
+    path.is_file().then_some(path)
 }
 
 /// Harness 发行版清单路径

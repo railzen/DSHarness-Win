@@ -1037,6 +1037,36 @@ pub fn stop_owned_for_hard_exit() {
     terminate_owned_process();
 }
 
+/// 读取并校验安装包内随附的 pnpm tarball。
+///
+/// 资源不存在、读取失败或 SHA-256 不匹配时返回 None（只记日志），由调用方
+/// 退回联网下载；这里不把资源损坏当成致命错误，避免安装包被杀软/磁盘错误
+/// 篡改一个文件就让整个安装流程失败。
+fn read_bundled_pnpm<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    tracker: &download::ProgressTracker<'_, R>,
+) -> Option<Vec<u8>> {
+    let path = config::get_bundled_pnpm_tarball(app_handle)?;
+    log::info!("Using bundled pnpm tarball: {}", path.display());
+    let buffer = match fs::read(&path) {
+        Ok(buffer) => buffer,
+        Err(e) => {
+            log::warn!("Failed to read bundled pnpm tarball, falling back to download: {e}");
+            return None;
+        }
+    };
+    if let Err(e) = download::verify_sha256(&buffer, config::PNPM_SHA256) {
+        log::warn!("Bundled pnpm tarball rejected, falling back to download: {e}");
+        return None;
+    }
+    tracker.update(
+        100.0,
+        "已使用安装包内置的 pnpm，无需下载".to_string(),
+        format!("Loaded bundled pnpm from {}", path.display()),
+    );
+    Some(buffer)
+}
+
 /// 安装环境（Node.js 运行时 + pnpm + 官方 Harness Release 对应的 npm 包）。
 ///
 /// 返回是否真正落盘更新了 Harness（dsh 任务实际下载并解压）；仅重装
@@ -1168,21 +1198,33 @@ pub async fn install(
         );
         let url = task.get_download_url()?;
         let name = url.rsplit('/').next().unwrap_or("").to_string();
-        let urls = vec![url];
         // 取文件名用于解压类型判定；下载 URL 正常必含 '/'，但这里不 panic，
         // 防御性兜底为空串（后续 ensure_extract 会因无法判定类型而报错返回，
         // 不再让进程崩溃）。
-        log::debug!("Download URL: {}", urls.join(" -> "));
         log::debug!("File name: {}", name);
-        let buffer = download::download_file_from_sources(&tracker, urls).await?;
-        log::info!("Download completed, file size: {} bytes", buffer.len());
-        let expected_digest = match index {
-            0 => download::fetch_node_sha256(task.get_download_url()?.as_str()).await?,
-            1 => config::PNPM_SHA256.to_string(),
-            _ => return Err("INSTALL_TASK_INVALID: unknown install task".to_string()),
+        // pnpm 随安装包附带（resources/pnpm），优先离线读取；资源缺失或校验
+        // 失败时才退回联网下载，保证旧安装包/开发环境仍可工作。
+        let bundled = match index {
+            1 => read_bundled_pnpm(app_handle, &tracker),
+            _ => None,
         };
-        download::verify_sha256(&buffer, &expected_digest)?;
-        log::info!("Download integrity verified for task {}", index + 1);
+        let buffer = match bundled {
+            Some(buffer) => buffer,
+            None => {
+                let urls = vec![url];
+                log::debug!("Download URL: {}", urls.join(" -> "));
+                let buffer = download::download_file_from_sources(&tracker, urls).await?;
+                log::info!("Download completed, file size: {} bytes", buffer.len());
+                let expected_digest = match index {
+                    0 => download::fetch_node_sha256(task.get_download_url()?.as_str()).await?,
+                    1 => config::PNPM_SHA256.to_string(),
+                    _ => return Err("INSTALL_TASK_INVALID: unknown install task".to_string()),
+                };
+                download::verify_sha256(&buffer, &expected_digest)?;
+                log::info!("Download integrity verified for task {}", index + 1);
+                buffer
+            }
+        };
         tracker.end_phase();
 
         // 2. 解压

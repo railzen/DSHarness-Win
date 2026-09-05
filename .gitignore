@@ -3,6 +3,7 @@ dist
 src-tauri/target
 src-tauri/gen
 src-tauri/resources/node
+src-tauri/resources/pnpm
 *.log
 .DS_Store
 .idea
